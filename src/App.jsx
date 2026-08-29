@@ -780,6 +780,10 @@ function PenilaianTahfidz({ db, persist, user }) {
     ? mentorStudents(db, db.mentors.find((m) => m.id === user.refId).id)
     : groupMembers(db, db.groups.find((g) => g.teacherId === user.refId).id);
 
+  const availableClasses = db.classes.filter((c) => scopeStudents.some((s) => s.kelasId === c.id));
+  const [kelasFilter, setKelasFilter] = useState("all");
+  const filteredStudents = kelasFilter === "all" ? scopeStudents : scopeStudents.filter((s) => s.kelasId === kelasFilter);
+
   const [studentId, setStudentId] = useState(scopeStudents[0]?.id || "");
   const [surahId, setSurahId] = useState(db.surahs[0].id);
   const [ayatMulai, setAyatMulai] = useState(1);
@@ -787,6 +791,12 @@ function PenilaianTahfidz({ db, persist, user }) {
   const [nilai, setNilai] = useState(80);
   const [tanggal, setTanggal] = useState(isoDaysAgo(0));
   const [msg, setMsg] = useState("");
+
+  function handleKelasFilter(val) {
+    setKelasFilter(val);
+    const list = val === "all" ? scopeStudents : scopeStudents.filter((s) => s.kelasId === val);
+    setStudentId(list[0]?.id || "");
+  }
 
   const surah = db.surahs.find((s) => s.id === surahId);
 
@@ -812,10 +822,22 @@ function PenilaianTahfidz({ db, persist, user }) {
       <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
         <div className="t-card" style={{ padding: 20 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            {availableClasses.length > 1 && (
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Sortir berdasarkan Kelas</label>
+                <select className="t-select" value={kelasFilter} onChange={(e) => handleKelasFilter(e.target.value)}>
+                  <option value="all">Semua Kelas ({scopeStudents.length} siswa)</option>
+                  {availableClasses.map((c) => {
+                    const count = scopeStudents.filter((s) => s.kelasId === c.id).length;
+                    return <option key={c.id} value={c.id}>{c.nama} ({count} siswa)</option>;
+                  })}
+                </select>
+              </div>
+            )}
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Siswa</label>
               <select className="t-select" value={studentId} onChange={(e) => setStudentId(e.target.value)}>
-                {scopeStudents.map((s) => <option key={s.id} value={s.id}>{s.nama}</option>)}
+                {filteredStudents.map((s) => <option key={s.id} value={s.id}>{s.nama}</option>)}
               </select>
             </div>
             <div>
