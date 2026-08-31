@@ -1,4 +1,4 @@
-import { supabase } from "./supabaseClient.js";
+import { supabase, SUPABASE_URL } from "./supabaseClient.js";
 
 function mustOk(result, label) {
   if (result.error) {
@@ -121,4 +121,36 @@ export async function deleteGroup(id) {
 export async function setProfileStatus(profileId, status) {
   const res = await supabase.from("profiles").update({ status }).eq("id", profileId);
   mustOk(res, "setProfileStatus");
+}
+
+/* ---------- AKUN SENDIRI: GANTI PASSWORD ---------- */
+export async function changeOwnPassword(newPassword) {
+  const { error } = await supabase.auth.updateUser({ password: newPassword });
+  if (error) throw error;
+}
+
+/* ---------- LUPA PASSWORD ---------- */
+export async function sendPasswordResetEmail(email) {
+  const { error } = await supabase.auth.resetPasswordForEmail(email, {
+    redirectTo: window.location.origin,
+  });
+  if (error) throw error;
+}
+
+/* ---------- ADMIN: TAMBAH USER BARU (lewat Edge Function) ---------- */
+export async function createUserAccount({ nama, email, password, role }) {
+  const { data: { session } } = await supabase.auth.getSession();
+  if (!session) throw new Error("Sesi tidak ditemukan, coba login ulang.");
+
+  const res = await fetch(`${SUPABASE_URL}/functions/v1/create-user`, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      Authorization: `Bearer ${session.access_token}`,
+    },
+    body: JSON.stringify({ nama, email, password, role }),
+  });
+  const json = await res.json();
+  if (!res.ok) throw new Error(json.error || "Gagal membuat user.");
+  return json;
 }

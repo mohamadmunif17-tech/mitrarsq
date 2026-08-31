@@ -3,7 +3,7 @@ import {
   LayoutDashboard, ClipboardCheck, BookOpen, Users, Settings, BarChart3,
   FileText, LogOut, CheckCircle2, XCircle, MinusCircle, CircleDot,
   GraduationCap, UserCog, Shield, ChevronRight, Plus, Trash2,
-  Loader2, BookMarked, TrendingUp, CalendarCheck, Star, AlertTriangle, Trophy, Download, Printer
+  Loader2, BookMarked, TrendingUp, CalendarCheck, Star, AlertTriangle, Trophy, KeyRound, Mail, Download, Printer
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -14,7 +14,7 @@ import { supabase } from "./supabaseClient.js";
 import {
   fetchAllData, saveAttendanceBatch, insertScore, insertStudent, bulkInsertStudents,
   deleteStudent, insertClass, deleteClass, findOrCreateClassByName, insertGroup, deleteGroup,
-  setProfileStatus,
+  setProfileStatus, changeOwnPassword, sendPasswordResetEmail, createUserAccount,
 } from "./db.js";
 
 
@@ -364,14 +364,16 @@ function Empty({ text }) {
 
 /* ============================== LOGIN ============================== */
 function LoginScreen({ onLoginSuccess }) {
+  const [mode, setMode] = useState("login"); // "login" | "forgot"
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [error, setError] = useState("");
+  const [info, setInfo] = useState("");
   const [loading, setLoading] = useState(false);
 
   async function handleSubmit(e) {
     e.preventDefault();
-    setError("");
+    setError(""); setInfo("");
     if (!email.trim() || !password) return;
     setLoading(true);
     const { data, error: authError } = await supabase.auth.signInWithPassword({
@@ -386,10 +388,24 @@ function LoginScreen({ onLoginSuccess }) {
     setLoading(false);
   }
 
+  async function handleForgot(e) {
+    e.preventDefault();
+    setError(""); setInfo("");
+    if (!email.trim()) return;
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(email.trim());
+      setInfo("Link reset password sudah dikirim ke email tersebut (cek folder Spam kalau tidak ada di Inbox).");
+    } catch (e) {
+      setError("Gagal mengirim email reset: " + e.message);
+    }
+    setLoading(false);
+  }
+
   return (
     <div className="tahfidz-root" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <GlobalStyle />
-      <form onSubmit={handleSubmit} style={{ width: "100%", maxWidth: 400 }}>
+      <form onSubmit={mode === "login" ? handleSubmit : handleForgot} style={{ width: "100%", maxWidth: 400 }}>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 14 }}>
             <img src={SMK_LOGO} alt="Logo SMK Telkom Malang" style={{ height: 32, objectFit: "contain" }} />
@@ -397,7 +413,9 @@ function LoginScreen({ onLoginSuccess }) {
             <img src={RUTABA_LOGO} alt="Logo Rutaba Shohibul Qur'an" style={{ height: 40, objectFit: "contain", borderRadius: "50%" }} />
           </div>
           <h1 className="font-display" style={{ fontSize: 30, fontWeight: 700, margin: 0 }}>Monitoring Tahfidz</h1>
-          <p style={{ color: "#8A8064", marginTop: 6, fontSize: 14 }}>SMK Telkom Malang &mdash; masuk dengan akun yang diberikan Admin</p>
+          <p style={{ color: "#8A8064", marginTop: 6, fontSize: 14 }}>
+            {mode === "login" ? "SMK Telkom Malang — masuk dengan akun yang diberikan Admin" : "Masukkan email untuk menerima link reset password"}
+          </p>
         </div>
 
         <div className="t-card" style={{ padding: 24 }}>
@@ -406,13 +424,24 @@ function LoginScreen({ onLoginSuccess }) {
               <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Email</label>
               <input type="email" className="t-input" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@sekolah.sch.id" required />
             </div>
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Password</label>
-              <input type="password" className="t-input" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
-            </div>
+            {mode === "login" && (
+              <div>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Password</label>
+                <input type="password" className="t-input" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+              </div>
+            )}
             {error && <div style={{ fontSize: 12.5, color: "var(--red)", fontWeight: 600 }}>{error}</div>}
+            {info && <div style={{ fontSize: 12.5, color: "var(--teal)", fontWeight: 600 }}>{info}</div>}
             <button type="submit" className="t-btn t-btn-primary" style={{ justifyContent: "center", marginTop: 4 }} disabled={loading}>
-              {loading ? <Loader2 size={15} className="animate-spin" /> : <ChevronRight size={15} />} {loading ? "Memeriksa..." : "Masuk"}
+              {loading ? <Loader2 size={15} className="animate-spin" /> : mode === "login" ? <ChevronRight size={15} /> : <Mail size={15} />}
+              {" "}{loading ? "Memproses..." : mode === "login" ? "Masuk" : "Kirim Link Reset"}
+            </button>
+            <button
+              type="button"
+              onClick={() => { setMode(mode === "login" ? "forgot" : "login"); setError(""); setInfo(""); }}
+              style={{ background: "none", border: "none", color: "var(--teal)", fontSize: 12.5, fontWeight: 600, cursor: "pointer", padding: 4 }}
+            >
+              {mode === "login" ? "Lupa password?" : "Kembali ke halaman login"}
             </button>
           </div>
         </div>
@@ -431,6 +460,7 @@ const NAV_BY_ROLE = {
     { id: "userman", label: "Manajemen User", icon: UserCog },
     { id: "monitoring", label: "Monitoring", icon: BarChart3 },
     { id: "report", label: "Report Bulanan", icon: FileText },
+    { id: "password", label: "Ganti Password", icon: KeyRound },
   ],
   pengajar: [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
@@ -438,21 +468,123 @@ const NAV_BY_ROLE = {
     { id: "penilaian", label: "Penilaian Tahfidz", icon: BookOpen },
     { id: "rekap", label: "Rekap Kelompok", icon: FileText },
     { id: "report", label: "Report Bulanan", icon: FileText },
+    { id: "password", label: "Ganti Password", icon: KeyRound },
   ],
   mentor: [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "penilaian", label: "Input Penilaian", icon: BookOpen },
     { id: "rekap", label: "Rekap Siswa Binaan", icon: FileText },
     { id: "report", label: "Report Bulanan", icon: FileText },
+    { id: "password", label: "Ganti Password", icon: KeyRound },
   ],
   siswa: [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "rekap", label: "Rekap Tahfidz", icon: BookOpen },
     { id: "presensi", label: "Presensi Saya", icon: ClipboardCheck },
+    { id: "password", label: "Ganti Password", icon: KeyRound },
   ],
 };
 
 const ROLE_LABEL = { admin: "Admin", pengajar: "Pengajar Tahfidz", mentor: "Mentor", siswa: "Siswa" };
+
+function GantiPassword({ onDone }) {
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setMsg("");
+    if (pw1.length < 6) { setMsg("Password minimal 6 karakter."); return; }
+    if (pw1 !== pw2) { setMsg("Konfirmasi password tidak sama."); return; }
+    setBusy(true);
+    try {
+      await changeOwnPassword(pw1);
+      setMsg("Password berhasil diubah.");
+      setPw1(""); setPw2("");
+    } catch (e) {
+      setMsg("Gagal mengubah password: " + e.message);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div>
+      <SectionTitle sub="Ubah password untuk akun Anda sendiri">Ganti Password</SectionTitle>
+      <form onSubmit={submit} className="t-card" style={{ padding: 20, maxWidth: 400 }}>
+        <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Password Baru</label>
+            <input type="password" className="t-input" value={pw1} onChange={(e) => setPw1(e.target.value)} required minLength={6} />
+          </div>
+          <div>
+            <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Konfirmasi Password Baru</label>
+            <input type="password" className="t-input" value={pw2} onChange={(e) => setPw2(e.target.value)} required minLength={6} />
+          </div>
+          {msg && <div style={{ fontSize: 12.5, color: msg.includes("berhasil") ? "var(--teal)" : "var(--red)", fontWeight: 600 }}>{msg}</div>}
+          <button type="submit" className="t-btn t-btn-primary" style={{ justifyContent: "center" }} disabled={busy}>
+            {busy ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />} {busy ? "Menyimpan..." : "Simpan Password Baru"}
+          </button>
+        </div>
+      </form>
+    </div>
+  );
+}
+
+function ResetPasswordScreen({ onDone }) {
+  const [pw1, setPw1] = useState("");
+  const [pw2, setPw2] = useState("");
+  const [msg, setMsg] = useState("");
+  const [busy, setBusy] = useState(false);
+
+  async function submit(e) {
+    e.preventDefault();
+    setMsg("");
+    if (pw1.length < 6) { setMsg("Password minimal 6 karakter."); return; }
+    if (pw1 !== pw2) { setMsg("Konfirmasi password tidak sama."); return; }
+    setBusy(true);
+    try {
+      await changeOwnPassword(pw1);
+      onDone();
+    } catch (e) {
+      setMsg("Gagal: " + e.message);
+    }
+    setBusy(false);
+  }
+
+  return (
+    <div className="tahfidz-root" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+      <GlobalStyle />
+      <form onSubmit={submit} style={{ width: "100%", maxWidth: 400 }}>
+        <div style={{ textAlign: "center", marginBottom: 28 }}>
+          <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 14 }}>
+            <img src={SMK_LOGO} alt="Logo SMK Telkom Malang" style={{ height: 32, objectFit: "contain" }} />
+            <img src={RUTABA_LOGO} alt="Logo Rutaba" style={{ height: 40, borderRadius: "50%", objectFit: "contain" }} />
+          </div>
+          <h1 className="font-display" style={{ fontSize: 26, fontWeight: 700, margin: 0 }}>Atur Password Baru</h1>
+          <p style={{ color: "#8A8064", marginTop: 6, fontSize: 14 }}>Masukkan password baru untuk akun Anda</p>
+        </div>
+        <div className="t-card" style={{ padding: 24 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Password Baru</label>
+              <input type="password" className="t-input" value={pw1} onChange={(e) => setPw1(e.target.value)} required minLength={6} autoFocus />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Konfirmasi Password Baru</label>
+              <input type="password" className="t-input" value={pw2} onChange={(e) => setPw2(e.target.value)} required minLength={6} />
+            </div>
+            {msg && <div style={{ fontSize: 12.5, color: "var(--red)", fontWeight: 600 }}>{msg}</div>}
+            <button type="submit" className="t-btn t-btn-primary" style={{ justifyContent: "center" }} disabled={busy}>
+              {busy ? <Loader2 size={15} className="animate-spin" /> : <KeyRound size={15} />} {busy ? "Menyimpan..." : "Simpan & Masuk"}
+            </button>
+          </div>
+        </div>
+      </form>
+    </div>
+  );
+}
 
 function Sidebar({ user, view, setView, onLogout }) {
   const items = NAV_BY_ROLE[user.role];
@@ -1534,6 +1666,11 @@ function MasterData({ db, refresh }) {
 /* ============================== ADMIN: MANAJEMEN USER ============================== */
 function ManajemenUser({ db, refresh }) {
   const [busyId, setBusyId] = useState(null);
+  const [showForm, setShowForm] = useState(false);
+  const [form, setForm] = useState({ nama: "", email: "", password: "", role: "pengajar" });
+  const [creating, setCreating] = useState(false);
+  const [formMsg, setFormMsg] = useState("");
+
   async function toggle(p) {
     setBusyId(p.id);
     try {
@@ -1544,10 +1681,79 @@ function ManajemenUser({ db, refresh }) {
     }
     setBusyId(null);
   }
+
+  async function handleCreate(e) {
+    e.preventDefault();
+    setFormMsg("");
+    if (!form.nama.trim() || !form.email.trim() || !form.password) {
+      setFormMsg("Nama, email, dan password wajib diisi.");
+      return;
+    }
+    if (form.password.length < 6) {
+      setFormMsg("Password minimal 6 karakter.");
+      return;
+    }
+    setCreating(true);
+    try {
+      await createUserAccount({ nama: form.nama.trim(), email: form.email.trim(), password: form.password, role: form.role });
+      await refresh();
+      setForm({ nama: "", email: "", password: "", role: "pengajar" });
+      setFormMsg("");
+      setShowForm(false);
+    } catch (e) {
+      setFormMsg(e.message);
+    }
+    setCreating(false);
+  }
+
   const roleColor = { admin: "var(--red)", pengajar: "var(--teal)", mentor: "var(--blue)", siswa: "#8A8064" };
   return (
     <div>
-      <SectionTitle sub="Aktifkan atau nonaktifkan akses akun pengguna. Untuk menambah akun baru, buat dulu di Supabase Authentication lalu hubungkan lewat tabel profiles.">Manajemen User</SectionTitle>
+      <SectionTitle sub="Kelola akses akun pengguna, atau buat akun baru untuk pengajar/mentor/admin.">Manajemen User</SectionTitle>
+
+      <div style={{ marginBottom: 16 }}>
+        <button className="t-btn t-btn-primary" onClick={() => setShowForm((v) => !v)}>
+          <Plus size={15} /> {showForm ? "Tutup Form" : "Tambah User Baru"}
+        </button>
+      </div>
+
+      {showForm && (
+        <form onSubmit={handleCreate} className="t-card" style={{ padding: 20, marginBottom: 20, maxWidth: 440 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Nama Lengkap</label>
+              <input className="t-input" value={form.nama} onChange={(e) => setForm({ ...form, nama: e.target.value })} placeholder="Ustadz/Ustadzah ..." required />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Email</label>
+              <input type="email" className="t-input" value={form.email} onChange={(e) => setForm({ ...form, email: e.target.value })} placeholder="nama@mitrarsq.app" required />
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Password Awal</label>
+              <input type="text" className="t-input" value={form.password} onChange={(e) => setForm({ ...form, password: e.target.value })} placeholder="Minimal 6 karakter" required />
+              <div style={{ fontSize: 11, color: "#8A8064", marginTop: 4 }}>Sampaikan password ini ke yang bersangkutan secara langsung. Mereka bisa menggantinya sendiri lewat menu "Ganti Password" setelah login.</div>
+            </div>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Role</label>
+              <select className="t-select" value={form.role} onChange={(e) => setForm({ ...form, role: e.target.value })}>
+                <option value="pengajar">Pengajar Tahfidz</option>
+                <option value="mentor">Mentor</option>
+                <option value="admin">Admin</option>
+              </select>
+              {(form.role === "pengajar" || form.role === "mentor") && (
+                <div style={{ fontSize: 11, color: "#8A8064", marginTop: 4 }}>
+                  Data {form.role === "pengajar" ? "pengajar" : "mentor"} baru akan otomatis dibuat dengan nama di atas. Untuk menugaskan kelompok/siswa, atur lewat Master Data setelah akun ini dibuat.
+                </div>
+              )}
+            </div>
+            {formMsg && <div style={{ fontSize: 12.5, color: "var(--red)", fontWeight: 600 }}>{formMsg}</div>}
+            <button type="submit" className="t-btn t-btn-primary" style={{ justifyContent: "center" }} disabled={creating}>
+              {creating ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} {creating ? "Membuat akun..." : "Buat Akun"}
+            </button>
+          </div>
+        </form>
+      )}
+
       <div className="t-card" style={{ padding: 8 }}>
         <table className="t-table">
           <thead><tr><th>Nama</th><th>Role</th><th>Status</th><th></th></tr></thead>
@@ -1636,6 +1842,7 @@ export default function TahfidzApp() {
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
   const [view, setView] = useState("dashboard");
+  const [recoveryMode, setRecoveryMode] = useState(false);
 
   async function refresh() {
     try {
@@ -1681,7 +1888,12 @@ export default function TahfidzApp() {
 
   useEffect(() => {
     supabase.auth.getSession().then(({ data: { session } }) => handleSession(session));
-    const { data: listener } = supabase.auth.onAuthStateChange((_event, session) => {
+    const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
+      if (event === "PASSWORD_RECOVERY") {
+        setRecoveryMode(true);
+        setLoading(false);
+        return;
+      }
       handleSession(session);
     });
     return () => listener.subscription.unsubscribe();
@@ -1696,6 +1908,16 @@ export default function TahfidzApp() {
   async function handleLogout() {
     await supabase.auth.signOut();
     setView("dashboard");
+  }
+  async function handleRecoveryDone() {
+    setRecoveryMode(false);
+    setLoading(true);
+    const { data: { session } } = await supabase.auth.getSession();
+    await handleSession(session);
+  }
+
+  if (recoveryMode) {
+    return <ResetPasswordScreen onDone={handleRecoveryDone} />;
   }
 
   if (loading) {
@@ -1745,6 +1967,8 @@ export default function TahfidzApp() {
     content = <Monitoring db={db} />;
   } else if (view === "report") {
     content = <ReportBulanan db={db} user={user} />;
+  } else if (view === "password") {
+    content = <GantiPassword />;
   }
 
   return (
