@@ -15,6 +15,7 @@ import {
   fetchAllData, saveAttendanceBatch, insertScore, insertStudent, bulkInsertStudents,
   deleteStudent, insertClass, deleteClass, findOrCreateClassByName, insertGroup, deleteGroup,
   setProfileStatus, changeOwnPassword, sendPasswordResetEmail, createUserAccount,
+  updateStudentGroup, updateStudentClass, bulkUpdateStudentGroup,
 } from "./db.js";
 
 
@@ -1341,6 +1342,9 @@ function MasterData({ db, refresh }) {
   const [importError, setImportError] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [busy, setBusy] = useState(false);
+  const [selectedIds, setSelectedIds] = useState([]);
+  const [bulkGroupId, setBulkGroupId] = useState(db.groups[0]?.id);
+  const [rowBusyId, setRowBusyId] = useState(null);
 
   async function addStudent() {
     if (!form.nama.trim() || !form.nis.trim()) return;
@@ -1412,6 +1416,46 @@ function MasterData({ db, refresh }) {
     setBusy(false);
   }
 
+  async function handleChangeGroup(studentId, groupId) {
+    setRowBusyId(studentId);
+    try {
+      await updateStudentGroup(studentId, groupId);
+      await refresh();
+    } catch (e) {
+      alert("Gagal memindahkan kelompok: " + e.message);
+    }
+    setRowBusyId(null);
+  }
+  async function handleChangeClass(studentId, kelasId) {
+    setRowBusyId(studentId);
+    try {
+      await updateStudentClass(studentId, kelasId);
+      await refresh();
+    } catch (e) {
+      alert("Gagal memindahkan kelas: " + e.message);
+    }
+    setRowBusyId(null);
+  }
+
+  function toggleSelect(id) {
+    setSelectedIds((prev) => prev.includes(id) ? prev.filter((x) => x !== id) : [...prev, id]);
+  }
+  function toggleSelectAll() {
+    setSelectedIds((prev) => prev.length === db.students.length ? [] : db.students.map((s) => s.id));
+  }
+  async function bulkMove() {
+    if (!selectedIds.length) return;
+    setBusy(true);
+    try {
+      await bulkUpdateStudentGroup(selectedIds, bulkGroupId);
+      await refresh();
+      setSelectedIds([]);
+    } catch (e) {
+      alert("Gagal memindahkan siswa terpilih: " + e.message);
+    }
+    setBusy(false);
+  }
+
   function normalizeHeader(h) {
     return String(h || "").trim().toLowerCase().replace(/[^a-z]/g, "");
   }
@@ -1445,6 +1489,7 @@ function MasterData({ db, refresh }) {
             nama: String(getField(row, ["nama", "namasiswa", "name"])).trim(),
             nis: String(getField(row, ["nis", "nomorindukswa", "nomorindukssiswa", "nisn"])).trim(),
             kelas: String(getField(row, ["kelas", "class", "rombel"])).trim(),
+            kelompok: String(getField(row, ["kelompok", "group", "grup", "kelompoktahfidz"])).trim(),
             jenisKelamin: normalizeGender(getField(row, ["jeniskelamin", "gender", "jk", "lp"])),
           }))
           .filter((r) => r.nama);
@@ -1463,6 +1508,11 @@ function MasterData({ db, refresh }) {
     e.target.value = "";
   }
 
+  function matchGroupName(nama) {
+    if (!nama) return null;
+    return db.groups.find((g) => g.nama.toLowerCase() === nama.toLowerCase()) || null;
+  }
+
   async function commitImport() {
     setBusy(true);
     try {
@@ -1475,12 +1525,13 @@ function MasterData({ db, refresh }) {
           kelasObj = await findOrCreateClassByName(row.kelas, classes);
           if (!classes.some((c) => c.id === kelasObj.id)) classes = [...classes, kelasObj];
         }
+        const matchedGroup = matchGroupName(row.kelompok);
         rows.push({
           nis: row.nis || `IMP${String(Date.now()).slice(-6)}${i}`,
           nama: row.nama,
           jenisKelamin: row.jenisKelamin || "",
           kelasId: kelasObj ? kelasObj.id : (db.classes[0]?.id || ""),
-          groupId: importGroupId || db.groups[0]?.id,
+          groupId: matchedGroup ? matchedGroup.id : (importGroupId || db.groups[0]?.id),
         });
       }
       await bulkInsertStudents(rows);
@@ -1494,7 +1545,7 @@ function MasterData({ db, refresh }) {
   }
 
   function downloadTemplate() {
-    const csv = "Nama,NIS,Kelas,Jenis Kelamin\nContoh Siswa Satu,2201099,X RPL 1,Laki-laki\nContoh Siswa Dua,2201098,XI TKJ 1,Perempuan\n";
+    const csv = "Nama,NIS,Kelas,Jenis Kelamin,Kelompok\nContoh Siswa Satu,2201099,X RPL 1,Laki-laki," + (db.groups[0]?.nama || "Kelompok A") + "\nContoh Siswa Dua,2201098,XI TKJ 1,Perempuan," + (db.groups[1]?.nama || db.groups[0]?.nama || "Kelompok B") + "\n";
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1539,13 +1590,13 @@ function MasterData({ db, refresh }) {
             <div className="t-card" style={{ padding: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Import dari File</div>
               <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 10 }}>
-                Format .xlsx, .xls, atau .csv dengan kolom Nama, NIS (opsional), Kelas, dan Jenis Kelamin.
+                Format .xlsx, .xls, atau .csv dengan kolom Nama, NIS (opsional), Kelas, Jenis Kelamin, dan Kelompok.
               </div>
               <button className="t-btn t-btn-ghost" style={{ width: "100%", justifyContent: "center", marginBottom: 8 }} onClick={downloadTemplate}>
                 <FileText size={14} /> Unduh Template
               </button>
               <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Kelompok tujuan (untuk semua data yang diimpor)</label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Kelompok cadangan (kalau kolom Kelompok di file kosong/tidak cocok)</label>
                 <select className="t-select" style={{ marginBottom: 8 }} value={importGroupId} onChange={(e) => setImportGroupId(e.target.value)}>
                   {db.groups.map((g) => <option key={g.id} value={g.id}>{g.nama}</option>)}
                 </select>
@@ -1568,32 +1619,80 @@ function MasterData({ db, refresh }) {
                 </div>
                 <div style={{ maxHeight: 260, overflowY: "auto" }} className="t-scrollbar">
                   <table className="t-table">
-                    <thead><tr><th>Nama</th><th>NIS</th><th>Kelas</th><th>L/P</th></tr></thead>
+                    <thead><tr><th>Nama</th><th>NIS</th><th>Kelas</th><th>L/P</th><th>Kelompok</th></tr></thead>
                     <tbody>
-                      {preview.map((r, i) => (
-                        <tr key={i}>
-                          <td style={{ fontWeight: 600 }}>{r.nama}</td>
-                          <td className="font-mono">{r.nis || <span style={{ color: "#B4AA8C" }}>otomatis</span>}</td>
-                          <td>{r.kelas || <span style={{ color: "var(--red)" }}>kosong</span>}</td>
-                          <td>{r.jenisKelamin || <span style={{ color: "var(--red)" }}>?</span>}</td>
-                        </tr>
-                      ))}
+                      {preview.map((r, i) => {
+                        const matched = matchGroupName(r.kelompok);
+                        return (
+                          <tr key={i}>
+                            <td style={{ fontWeight: 600 }}>{r.nama}</td>
+                            <td className="font-mono">{r.nis || <span style={{ color: "#B4AA8C" }}>otomatis</span>}</td>
+                            <td>{r.kelas || <span style={{ color: "var(--red)" }}>kosong</span>}</td>
+                            <td>{r.jenisKelamin || <span style={{ color: "var(--red)" }}>?</span>}</td>
+                            <td>
+                              {matched ? matched.nama : (
+                                <span style={{ color: r.kelompok ? "var(--red)" : "#B4AA8C" }}>
+                                  {r.kelompok ? `"${r.kelompok}" tidak cocok, pakai cadangan` : "pakai cadangan"}
+                                </span>
+                              )}
+                            </td>
+                          </tr>
+                        );
+                      })}
                     </tbody>
                   </table>
                 </div>
               </div>
             )}
+
+            {selectedIds.length > 0 && (
+              <div className="t-card" style={{ padding: 14, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", borderColor: "var(--gold)" }}>
+                <span style={{ fontSize: 13, fontWeight: 700 }}>{selectedIds.length} siswa dipilih</span>
+                <select className="t-select" style={{ width: 220 }} value={bulkGroupId} onChange={(e) => setBulkGroupId(e.target.value)}>
+                  {db.groups.map((g) => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                </select>
+                <button className="t-btn t-btn-gold" onClick={bulkMove} disabled={busy}>
+                  {busy ? "Memindahkan..." : "Pindahkan ke Kelompok Ini"}
+                </button>
+                <button className="t-btn t-btn-ghost" onClick={() => setSelectedIds([])}>Batal Pilih</button>
+              </div>
+            )}
+
             <div className="t-card" style={{ padding: 8 }}>
               <table className="t-table">
-                <thead><tr><th>NIS</th><th>Nama</th><th>L/P</th><th>Kelas</th><th>Kelompok</th><th></th></tr></thead>
+                <thead>
+                  <tr>
+                    <th style={{ width: 28 }}>
+                      <input type="checkbox" checked={selectedIds.length === db.students.length && db.students.length > 0} onChange={toggleSelectAll} />
+                    </th>
+                    <th>NIS</th><th>Nama</th><th>L/P</th><th>Kelas</th><th>Kelompok</th><th></th>
+                  </tr>
+                </thead>
                 <tbody>
                   {db.students.map((s) => (
                     <tr key={s.id}>
+                      <td><input type="checkbox" checked={selectedIds.includes(s.id)} onChange={() => toggleSelect(s.id)} /></td>
                       <td className="font-mono">{s.nis}</td>
                       <td style={{ fontWeight: 600 }}>{s.nama}</td>
                       <td>{s.jenisKelamin || "-"}</td>
-                      <td>{className(db, s.kelasId)}</td>
-                      <td>{groupName(db, s.groupId)}</td>
+                      <td>
+                        <select
+                          className="t-select" style={{ fontSize: 12, padding: "5px 8px" }}
+                          value={s.kelasId || ""} disabled={rowBusyId === s.id}
+                          onChange={(e) => handleChangeClass(s.id, e.target.value)}
+                        >
+                          {db.classes.map((c) => <option key={c.id} value={c.id}>{c.nama}</option>)}
+                        </select>
+                      </td>
+                      <td>
+                        <select
+                          className="t-select" style={{ fontSize: 12, padding: "5px 8px" }}
+                          value={s.groupId || ""} disabled={rowBusyId === s.id}
+                          onChange={(e) => handleChangeGroup(s.id, e.target.value)}
+                        >
+                          {db.groups.map((g) => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                        </select>
+                      </td>
                       <td><button className="t-btn t-btn-danger" style={{ padding: "5px 8px" }} onClick={() => removeStudent(s.id)}><Trash2 size={13} /></button></td>
                     </tr>
                   ))}

@@ -90,6 +90,18 @@ export async function deleteStudent(id) {
   const res = await supabase.from("students").delete().eq("id", id);
   mustOk(res, "deleteStudent");
 }
+export async function updateStudentGroup(studentId, groupId) {
+  const res = await supabase.from("students").update({ group_id: groupId }).eq("id", studentId);
+  mustOk(res, "updateStudentGroup");
+}
+export async function updateStudentClass(studentId, kelasId) {
+  const res = await supabase.from("students").update({ kelas_id: kelasId }).eq("id", studentId);
+  mustOk(res, "updateStudentClass");
+}
+export async function bulkUpdateStudentGroup(studentIds, groupId) {
+  const res = await supabase.from("students").update({ group_id: groupId }).in("id", studentIds);
+  mustOk(res, "bulkUpdateStudentGroup");
+}
 
 /* ---------- MASTER DATA: KELAS ---------- */
 export async function insertClass(nama) {
