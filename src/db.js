@@ -10,27 +10,30 @@ function mustOk(result, label) {
 
 /* ---------- FETCH SEMUA DATA (dipanggil ulang setelah tiap mutasi) ---------- */
 export async function fetchAllData() {
-  const [classes, teachers, mentors, groups, students, mentorAssignments, surahs, attendance, scores, profiles] =
+  const [classes, teachers, mentors, students, mentorAssignments, surahs, attendance, scores, profiles, certifications, schoolSettings] =
     await Promise.all([
       supabase.from("classes").select("*"),
       supabase.from("teachers").select("*"),
       supabase.from("mentors").select("*"),
-      supabase.from("tahfidz_groups").select("*"),
       supabase.from("students").select("*"),
       supabase.from("mentor_assignments").select("*"),
       supabase.from("surahs").select("*"),
       supabase.from("attendance").select("*"),
       supabase.from("scores").select("*"),
       supabase.from("profiles").select("*"),
+      supabase.from("certifications").select("*"),
+      supabase.from("school_settings").select("*").eq("id", true).single(),
     ]);
 
   return {
-    classes: mustOk(classes, "classes").map((c) => ({ id: c.id, nama: c.nama })),
-    teachers: mustOk(teachers, "teachers").map((t) => ({ id: t.id, nama: t.nama })),
+    classes: mustOk(classes, "classes").map((c) => ({ id: c.id, nama: c.nama, teacherId: c.teacher_id })),
+    teachers: mustOk(teachers, "teachers").map((t) => ({
+      id: t.id, nama: t.nama, fotoUrl: t.foto_url, noHp: t.no_hp,
+      pendidikanTerakhir: t.pendidikan_terakhir, alamat: t.alamat,
+    })),
     mentors: mustOk(mentors, "mentors").map((m) => ({ id: m.id, nama: m.nama })),
-    groups: mustOk(groups, "groups").map((g) => ({ id: g.id, nama: g.nama, teacherId: g.teacher_id })),
     students: mustOk(students, "students").map((s) => ({
-      id: s.id, nis: s.nis, nama: s.nama, jenisKelamin: s.jenis_kelamin, kelasId: s.kelas_id, groupId: s.group_id,
+      id: s.id, nis: s.nis, nama: s.nama, jenisKelamin: s.jenis_kelamin, kelasId: s.kelas_id,
     })),
     mentorAssignments: mustOk(mentorAssignments, "mentor_assignments").map((m) => ({
       id: m.id, mentorId: m.mentor_id, studentId: m.student_id,
@@ -44,8 +47,12 @@ export async function fetchAllData() {
       ayatMulai: s.ayat_mulai, ayatAkhir: s.ayat_akhir, nilai: s.nilai, penguji: s.penguji, inputBy: s.input_by,
     })),
     profiles: mustOk(profiles, "profiles").map((p) => ({
-      id: p.id, nama: p.nama, role: p.role, refId: p.ref_id, status: p.status,
+      id: p.id, nama: p.nama, role: p.role, refId: p.ref_id, status: p.status, signatureUrl: p.signature_url,
     })),
+    certifications: mustOk(certifications, "certifications").map((c) => ({
+      id: c.id, teacherId: c.teacher_id, nama: c.nama_sertifikasi, penyelenggara: c.penyelenggara, tahun: c.tahun, fileUrl: c.file_url,
+    })),
+    schoolSettings: { stempelUrl: schoolSettings.data?.stempel_url || null },
   };
 }
 
@@ -72,7 +79,7 @@ export async function insertScore(entry) {
 export async function insertStudent(student) {
   const res = await supabase.from("students").insert({
     nis: student.nis, nama: student.nama, jenis_kelamin: student.jenisKelamin || null,
-    kelas_id: student.kelasId, group_id: student.groupId,
+    kelas_id: student.kelasId,
   });
   mustOk(res, "insertStudent");
 }
@@ -80,7 +87,7 @@ export async function insertStudent(student) {
 export async function bulkInsertStudents(rows) {
   const payload = rows.map((r) => ({
     nis: r.nis, nama: r.nama, jenis_kelamin: r.jenisKelamin || null,
-    kelas_id: r.kelasId, group_id: r.groupId,
+    kelas_id: r.kelasId,
   }));
   const res = await supabase.from("students").insert(payload);
   mustOk(res, "bulkInsertStudents");
@@ -90,43 +97,90 @@ export async function deleteStudent(id) {
   const res = await supabase.from("students").delete().eq("id", id);
   mustOk(res, "deleteStudent");
 }
-export async function updateStudentGroup(studentId, groupId) {
-  const res = await supabase.from("students").update({ group_id: groupId }).eq("id", studentId);
-  mustOk(res, "updateStudentGroup");
-}
 export async function updateStudentClass(studentId, kelasId) {
   const res = await supabase.from("students").update({ kelas_id: kelasId }).eq("id", studentId);
   mustOk(res, "updateStudentClass");
 }
-export async function bulkUpdateStudentGroup(studentIds, groupId) {
-  const res = await supabase.from("students").update({ group_id: groupId }).in("id", studentIds);
-  mustOk(res, "bulkUpdateStudentGroup");
+export async function bulkUpdateStudentClass(studentIds, kelasId) {
+  const res = await supabase.from("students").update({ kelas_id: kelasId }).in("id", studentIds);
+  mustOk(res, "bulkUpdateStudentClass");
 }
 
-/* ---------- MASTER DATA: KELAS ---------- */
-export async function insertClass(nama) {
-  const res = await supabase.from("classes").insert({ nama }).select().single();
+/* ---------- MASTER DATA: KELAS (pengajar ditugaskan langsung ke kelas) ---------- */
+export async function insertClass(nama, teacherId = null) {
+  const res = await supabase.from("classes").insert({ nama, teacher_id: teacherId }).select().single();
   return mustOk(res, "insertClass");
 }
 export async function deleteClass(id) {
   const res = await supabase.from("classes").delete().eq("id", id);
   mustOk(res, "deleteClass");
 }
+export async function updateClassTeacher(classId, teacherId) {
+  const res = await supabase.from("classes").update({ teacher_id: teacherId || null }).eq("id", classId);
+  mustOk(res, "updateClassTeacher");
+}
 export async function findOrCreateClassByName(nama, existingClasses) {
   const found = existingClasses.find((c) => c.nama.toLowerCase() === nama.toLowerCase());
   if (found) return found;
   const created = await insertClass(nama);
-  return { id: created.id, nama: created.nama };
+  return { id: created.id, nama: created.nama, teacherId: created.teacher_id };
 }
 
-/* ---------- MASTER DATA: KELOMPOK ---------- */
-export async function insertGroup(nama, teacherId) {
-  const res = await supabase.from("tahfidz_groups").insert({ nama, teacher_id: teacherId });
-  mustOk(res, "insertGroup");
+/* ---------- UPLOAD FILE (foto, tanda tangan, stempel, sertifikat) ---------- */
+export async function uploadFile(file, folder) {
+  const ext = file.name.split(".").pop();
+  const path = `${folder}/${crypto.randomUUID()}.${ext}`;
+  const { error } = await supabase.storage.from("uploads").upload(path, file, { upsert: true });
+  if (error) throw error;
+  const { data } = supabase.storage.from("uploads").getPublicUrl(path);
+  return data.publicUrl;
 }
-export async function deleteGroup(id) {
-  const res = await supabase.from("tahfidz_groups").delete().eq("id", id);
-  mustOk(res, "deleteGroup");
+
+/* ---------- PROFIL PENGGUNA (tanda tangan sendiri) ---------- */
+export async function updateOwnSignature(profileId, url) {
+  const res = await supabase.from("profiles").update({ signature_url: url }).eq("id", profileId);
+  mustOk(res, "updateOwnSignature");
+}
+
+/* ---------- PROFIL LENGKAP PENGAJAR ---------- */
+export async function updateTeacherProfile(teacherId, fields) {
+  const payload = {};
+  if (fields.fotoUrl !== undefined) payload.foto_url = fields.fotoUrl;
+  if (fields.noHp !== undefined) payload.no_hp = fields.noHp;
+  if (fields.pendidikanTerakhir !== undefined) payload.pendidikan_terakhir = fields.pendidikanTerakhir;
+  if (fields.alamat !== undefined) payload.alamat = fields.alamat;
+  const res = await supabase.from("teachers").update(payload).eq("id", teacherId);
+  mustOk(res, "updateTeacherProfile");
+}
+
+/* ---------- SERTIFIKASI PENGAJAR ---------- */
+export async function fetchCertifications(teacherId) {
+  const res = await supabase.from("certifications").select("*").eq("teacher_id", teacherId).order("tahun", { ascending: false });
+  return mustOk(res, "fetchCertifications").map((c) => ({
+    id: c.id, teacherId: c.teacher_id, nama: c.nama_sertifikasi, penyelenggara: c.penyelenggara, tahun: c.tahun, fileUrl: c.file_url,
+  }));
+}
+export async function addCertification(teacherId, cert) {
+  const res = await supabase.from("certifications").insert({
+    teacher_id: teacherId, nama_sertifikasi: cert.nama, penyelenggara: cert.penyelenggara || null,
+    tahun: cert.tahun || null, file_url: cert.fileUrl || null,
+  });
+  mustOk(res, "addCertification");
+}
+export async function deleteCertification(id) {
+  const res = await supabase.from("certifications").delete().eq("id", id);
+  mustOk(res, "deleteCertification");
+}
+
+/* ---------- PENGATURAN SEKOLAH (stempel) ---------- */
+export async function fetchSchoolSettings() {
+  const res = await supabase.from("school_settings").select("*").eq("id", true).single();
+  const data = mustOk(res, "fetchSchoolSettings");
+  return { stempelUrl: data?.stempel_url || null };
+}
+export async function updateSchoolStamp(url) {
+  const res = await supabase.from("school_settings").update({ stempel_url: url }).eq("id", true);
+  mustOk(res, "updateSchoolStamp");
 }
 
 /* ---------- MANAJEMEN USER (profiles) ---------- */

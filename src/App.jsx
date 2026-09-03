@@ -3,7 +3,8 @@ import {
   LayoutDashboard, ClipboardCheck, BookOpen, Users, Settings, BarChart3,
   FileText, LogOut, CheckCircle2, XCircle, MinusCircle, CircleDot,
   GraduationCap, UserCog, Shield, ChevronRight, Plus, Trash2,
-  Loader2, BookMarked, TrendingUp, CalendarCheck, Star, AlertTriangle, Trophy, KeyRound, Mail, Download, Printer
+  Loader2, BookMarked, TrendingUp, CalendarCheck, Star, AlertTriangle, Trophy, KeyRound, Mail, Download, Printer, Menu,
+  Upload, Award, Phone, MapPin, Stamp, ImageIcon
 } from "lucide-react";
 import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
@@ -13,9 +14,11 @@ import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
 import {
   fetchAllData, saveAttendanceBatch, insertScore, insertStudent, bulkInsertStudents,
-  deleteStudent, insertClass, deleteClass, findOrCreateClassByName, insertGroup, deleteGroup,
+  deleteStudent, insertClass, deleteClass, findOrCreateClassByName, updateClassTeacher,
   setProfileStatus, changeOwnPassword, sendPasswordResetEmail, createUserAccount,
-  updateStudentGroup, updateStudentClass, bulkUpdateStudentGroup,
+  updateStudentClass, bulkUpdateStudentClass,
+  uploadFile, updateOwnSignature, updateTeacherProfile, addCertification, deleteCertification,
+  updateSchoolStamp,
 } from "./db.js";
 
 
@@ -124,6 +127,47 @@ const GlobalStyle = () => (
     .t-scrollbar::-webkit-scrollbar { width: 6px; height: 6px; }
     .t-scrollbar::-webkit-scrollbar-thumb { background: var(--line); border-radius: 3px; }
 
+    /* ---- Layout grid yang menyesuaikan lebar layar ---- */
+    .grid-4 { display: grid; grid-template-columns: repeat(4, 1fr); }
+    .grid-3 { display: grid; grid-template-columns: repeat(3, 1fr); }
+    .grid-2 { display: grid; grid-template-columns: repeat(2, 1fr); }
+    .master-grid { display: grid; grid-template-columns: 300px 1fr; gap: 16px; }
+
+    .app-topbar {
+      display: none;
+      align-items: center; gap: 12px;
+      padding: 12px 16px; background: var(--ink); position: sticky; top: 0; z-index: 30;
+    }
+    .app-topbar button { background: transparent; border: none; color: white; padding: 4px; cursor: pointer; }
+    .sidebar-overlay { display: none; }
+
+    @media (max-width: 980px) {
+      .master-grid { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 760px) {
+      .grid-4 { grid-template-columns: repeat(2, 1fr); }
+      .grid-3 { grid-template-columns: repeat(2, 1fr); }
+      .grid-2 { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 480px) {
+      .grid-4 { grid-template-columns: 1fr; }
+      .grid-3 { grid-template-columns: 1fr; }
+    }
+
+    @media (max-width: 860px) {
+      .app-topbar { display: flex; }
+      .app-sidebar {
+        position: fixed !important; left: 0; top: 0; bottom: 0; z-index: 50;
+        transform: translateX(-100%); transition: transform .22s ease;
+        box-shadow: 4px 0 24px rgba(0,0,0,0.25);
+      }
+      .app-sidebar.open { transform: translateX(0); }
+      .sidebar-overlay.open {
+        display: block; position: fixed; inset: 0; background: rgba(27,58,52,0.45); z-index: 40;
+      }
+      .app-content { padding: 16px !important; }
+    }
+
     .report-sheet { max-width: 760px; margin: 0 auto; }
     .report-kop { text-align: center; border-bottom: 2px solid var(--ink); padding-bottom: 14px; margin-bottom: 18px; }
     .report-stat-box { background: var(--panel-soft); border-radius: 10px; padding: 12px; text-align: center; }
@@ -191,14 +235,24 @@ function surahName(db, id) {
 function className(db, id) {
   return db.classes.find((c) => c.id === id)?.nama || "-";
 }
-function groupName(db, id) {
-  return db.groups.find((g) => g.id === id)?.nama || "-";
+function teacherName(db, id) {
+  return db.teachers.find((t) => t.id === id)?.nama || "-";
 }
 function studentName(db, id) {
   return db.students.find((s) => s.id === id)?.nama || "-";
 }
-function groupMembers(db, groupId) {
-  return db.students.filter((s) => s.groupId === groupId);
+function classTeacherId(db, kelasId) {
+  return db.classes.find((c) => c.id === kelasId)?.teacherId || null;
+}
+function teacherClasses(db, teacherId) {
+  return db.classes.filter((c) => c.teacherId === teacherId);
+}
+function teacherStudents(db, teacherId) {
+  const classIds = teacherClasses(db, teacherId).map((c) => c.id);
+  return db.students.filter((s) => classIds.includes(s.kelasId));
+}
+function classListLabel(classes) {
+  return classes.length ? classes.map((c) => c.nama).join(", ") : "Belum ada kelas ditugaskan";
 }
 function mentorStudents(db, mentorId) {
   const ids = db.mentorAssignments.filter((ma) => ma.mentorId === mentorId).map((ma) => ma.studentId);
@@ -461,14 +515,16 @@ const NAV_BY_ROLE = {
     { id: "userman", label: "Manajemen User", icon: UserCog },
     { id: "monitoring", label: "Monitoring", icon: BarChart3 },
     { id: "report", label: "Report Bulanan", icon: FileText },
+    { id: "profil", label: "Profil Saya", icon: Stamp },
     { id: "password", label: "Ganti Password", icon: KeyRound },
   ],
   pengajar: [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
     { id: "presensi", label: "Presensi Harian", icon: ClipboardCheck },
     { id: "penilaian", label: "Penilaian Tahfidz", icon: BookOpen },
-    { id: "rekap", label: "Rekap Kelompok", icon: FileText },
+    { id: "rekap", label: "Rekap Kelas", icon: FileText },
     { id: "report", label: "Report Bulanan", icon: FileText },
+    { id: "profil", label: "Profil Saya", icon: Award },
     { id: "password", label: "Ganti Password", icon: KeyRound },
   ],
   mentor: [
@@ -587,32 +643,261 @@ function ResetPasswordScreen({ onDone }) {
   );
 }
 
-function Sidebar({ user, view, setView, onLogout }) {
-  const items = NAV_BY_ROLE[user.role];
+function SignatureUploader({ label, currentUrl, onUpload, uploading }) {
   return (
-    <div className="no-print" style={{ width: 232, background: "var(--ink)", minHeight: "100vh", padding: 18, display: "flex", flexDirection: "column", flexShrink: 0 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 26, padding: "0 4px" }}>
-        <img src={RUTABA_LOGO} alt="Logo Rutaba" style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
-        <div>
-          <div className="font-display" style={{ color: "white", fontWeight: 700, fontSize: 15, lineHeight: 1.1 }}>Tahfidz</div>
-          <div style={{ color: "#B4AA8C", fontSize: 10 }}>SMK Telkom Malang</div>
+    <div>
+      <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064", display: "block", marginBottom: 6 }}>{label}</label>
+      <div style={{ display: "flex", alignItems: "center", gap: 12 }}>
+        <div style={{
+          width: 130, height: 70, border: "1.5px dashed var(--line)", borderRadius: 10,
+          display: "flex", alignItems: "center", justifyContent: "center", background: "white", overflow: "hidden", flexShrink: 0,
+        }}>
+          {currentUrl ? <img src={currentUrl} alt={label} style={{ maxWidth: "100%", maxHeight: "100%", objectFit: "contain" }} /> : <span style={{ fontSize: 11, color: "#B4AA8C" }}>Belum ada</span>}
         </div>
+        <label className="t-btn t-btn-ghost" style={{ cursor: "pointer" }}>
+          {uploading ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {uploading ? "Mengunggah..." : "Unggah PNG"}
+          <input type="file" accept="image/png,image/jpeg" style={{ display: "none" }} onChange={onUpload} disabled={uploading} />
+        </label>
       </div>
-      <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
-        {items.map((it) => (
-          <div key={it.id} className={`t-nav-item ${view === it.id ? "active" : ""}`} onClick={() => setView(it.id)}>
-            <it.icon size={16} /> {it.label}
+      <div style={{ fontSize: 11, color: "#8A8064", marginTop: 4 }}>Gunakan PNG latar transparan untuk hasil terbaik di dokumen.</div>
+    </div>
+  );
+}
+
+function ProfilSaya({ db, refresh, user }) {
+  const isAdmin = user.role === "admin";
+  const teacher = user.role === "pengajar" ? db.teachers.find((t) => t.id === user.refId) : null;
+  const myProfile = db.profiles.find((p) => p.id === user.id);
+
+  const [form, setForm] = useState({
+    noHp: teacher?.noHp || "", pendidikanTerakhir: teacher?.pendidikanTerakhir || "", alamat: teacher?.alamat || "",
+  });
+  const [saving, setSaving] = useState(false);
+  const [saveMsg, setSaveMsg] = useState("");
+  const [uploadingFoto, setUploadingFoto] = useState(false);
+  const [uploadingTtd, setUploadingTtd] = useState(false);
+  const [uploadingStempel, setUploadingStempel] = useState(false);
+
+  const [certForm, setCertForm] = useState({ nama: "", penyelenggara: "", tahun: new Date().getFullYear() });
+  const [addingCert, setAddingCert] = useState(false);
+  const myCerts = teacher ? db.certifications.filter((c) => c.teacherId === teacher.id).sort((a, b) => (b.tahun || 0) - (a.tahun || 0)) : [];
+
+  async function handleFotoUpload(e) {
+    const file = e.target.files[0];
+    if (!file || !teacher) return;
+    setUploadingFoto(true);
+    try {
+      const url = await uploadFile(file, `foto/${teacher.id}`);
+      await updateTeacherProfile(teacher.id, { fotoUrl: url });
+      await refresh();
+    } catch (err) {
+      alert("Gagal unggah foto: " + err.message);
+    }
+    setUploadingFoto(false);
+  }
+
+  async function handleSignatureUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploadingTtd(true);
+    try {
+      const url = await uploadFile(file, `ttd/${user.id}`);
+      await updateOwnSignature(user.id, url);
+      await refresh();
+    } catch (err) {
+      alert("Gagal unggah tanda tangan: " + err.message);
+    }
+    setUploadingTtd(false);
+  }
+
+  async function handleStempelUpload(e) {
+    const file = e.target.files[0];
+    if (!file) return;
+    setUploadingStempel(true);
+    try {
+      const url = await uploadFile(file, "stempel");
+      await updateSchoolStamp(url);
+      await refresh();
+    } catch (err) {
+      alert("Gagal unggah stempel: " + err.message);
+    }
+    setUploadingStempel(false);
+  }
+
+  async function saveProfile(e) {
+    e.preventDefault();
+    if (!teacher) return;
+    setSaving(true);
+    setSaveMsg("");
+    try {
+      await updateTeacherProfile(teacher.id, form);
+      await refresh();
+      setSaveMsg("Profil tersimpan.");
+      setTimeout(() => setSaveMsg(""), 2000);
+    } catch (err) {
+      setSaveMsg("Gagal: " + err.message);
+    }
+    setSaving(false);
+  }
+
+  async function submitCert(e) {
+    e.preventDefault();
+    if (!teacher || !certForm.nama.trim()) return;
+    setAddingCert(true);
+    try {
+      await addCertification(teacher.id, certForm);
+      await refresh();
+      setCertForm({ nama: "", penyelenggara: "", tahun: new Date().getFullYear() });
+    } catch (err) {
+      alert("Gagal menambah sertifikasi: " + err.message);
+    }
+    setAddingCert(false);
+  }
+  async function removeCert(id) {
+    if (!confirm("Hapus sertifikasi ini?")) return;
+    try {
+      await deleteCertification(id);
+      await refresh();
+    } catch (err) {
+      alert("Gagal menghapus: " + err.message);
+    }
+  }
+
+  return (
+    <div>
+      <SectionTitle sub="Kelola foto, kontak, tanda tangan digital, dan sertifikasi Anda">Profil Saya</SectionTitle>
+
+      <div className="master-grid">
+        <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          {teacher && (
+            <div className="t-card" style={{ padding: 18 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Foto Profil</div>
+              <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
+                <div style={{ width: 64, height: 64, borderRadius: "50%", overflow: "hidden", background: "var(--panel-soft)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {teacher.fotoUrl ? <img src={teacher.fotoUrl} alt="Foto" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={22} color="#B4AA8C" />}
+                </div>
+                <label className="t-btn t-btn-ghost" style={{ cursor: "pointer" }}>
+                  {uploadingFoto ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {uploadingFoto ? "Mengunggah..." : "Ganti Foto"}
+                  <input type="file" accept="image/png,image/jpeg" style={{ display: "none" }} onChange={handleFotoUpload} disabled={uploadingFoto} />
+                </label>
+              </div>
+            </div>
+          )}
+
+          <div className="t-card" style={{ padding: 18 }}>
+            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Tanda Tangan Digital</div>
+            <SignatureUploader label={isAdmin ? "Tanda Tangan Kepala Program" : "Tanda Tangan Pengajar"} currentUrl={myProfile?.signatureUrl} onUpload={handleSignatureUpload} uploading={uploadingTtd} />
           </div>
-        ))}
-      </div>
-      <div style={{ borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 14, marginTop: 14 }}>
-        <div style={{ color: "white", fontSize: 13, fontWeight: 600 }}>{user.nama}</div>
-        <div style={{ color: "#B4AA8C", fontSize: 11, marginBottom: 10 }}>{ROLE_LABEL[user.role]}</div>
-        <div className="t-nav-item" onClick={onLogout}>
-          <LogOut size={16} /> Keluar
+
+          {isAdmin && (
+            <div className="t-card" style={{ padding: 18 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Stempel Sekolah</div>
+              <SignatureUploader label="Stempel (dipakai di semua Report)" currentUrl={db.schoolSettings?.stempelUrl} onUpload={handleStempelUpload} uploading={uploadingStempel} />
+            </div>
+          )}
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
+          {teacher && (
+            <form onSubmit={saveProfile} className="t-card" style={{ padding: 18 }}>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Data Kontak & Pendidikan</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}><Phone size={11} style={{ verticalAlign: -1 }} /> No. HP / WhatsApp</label>
+                  <input className="t-input" value={form.noHp} onChange={(e) => setForm({ ...form, noHp: e.target.value })} placeholder="08xxxxxxxxxx" />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}><GraduationCap size={11} style={{ verticalAlign: -1 }} /> Pendidikan Terakhir</label>
+                  <input className="t-input" value={form.pendidikanTerakhir} onChange={(e) => setForm({ ...form, pendidikanTerakhir: e.target.value })} placeholder="mis. S1 Pendidikan Agama Islam" />
+                </div>
+                <div>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}><MapPin size={11} style={{ verticalAlign: -1 }} /> Alamat</label>
+                  <textarea className="t-input" style={{ minHeight: 70, resize: "vertical", fontFamily: "inherit" }} value={form.alamat} onChange={(e) => setForm({ ...form, alamat: e.target.value })} />
+                </div>
+                {saveMsg && <div style={{ fontSize: 12.5, color: saveMsg.includes("tersimpan") ? "var(--teal)" : "var(--red)", fontWeight: 600 }}>{saveMsg}</div>}
+                <button type="submit" className="t-btn t-btn-primary" style={{ justifyContent: "center" }} disabled={saving}>
+                  {saving ? "Menyimpan..." : "Simpan Data"}
+                </button>
+              </div>
+            </form>
+          )}
+
+          {teacher && (
+            <div className="t-card" style={{ padding: 18 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 13, marginBottom: 12 }}>
+                <Award size={16} color="var(--gold)" /> Sertifikasi yang Pernah Diikuti
+              </div>
+              <form onSubmit={submitCert} style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid var(--line)" }}>
+                <input className="t-input" placeholder="Nama sertifikasi/pelatihan" value={certForm.nama} onChange={(e) => setCertForm({ ...certForm, nama: e.target.value })} required />
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input className="t-input" placeholder="Penyelenggara" value={certForm.penyelenggara} onChange={(e) => setCertForm({ ...certForm, penyelenggara: e.target.value })} style={{ flex: 2 }} />
+                  <input className="t-input" type="number" placeholder="Tahun" value={certForm.tahun} onChange={(e) => setCertForm({ ...certForm, tahun: e.target.value })} style={{ flex: 1 }} />
+                </div>
+                <button type="submit" className="t-btn t-btn-primary" style={{ justifyContent: "center" }} disabled={addingCert}>
+                  <Plus size={14} /> {addingCert ? "Menyimpan..." : "Tambah Sertifikasi"}
+                </button>
+              </form>
+              {myCerts.length ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {myCerts.map((c) => (
+                    <div key={c.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{c.nama}</div>
+                        <div style={{ fontSize: 11.5, color: "#8A8064" }}>{[c.penyelenggara, c.tahun].filter(Boolean).join(" · ")}</div>
+                      </div>
+                      <button className="t-btn t-btn-danger" style={{ padding: "4px 8px" }} onClick={() => removeCert(c.id)}><Trash2 size={12} /></button>
+                    </div>
+                  ))}
+                </div>
+              ) : <Empty text="Belum ada sertifikasi ditambahkan." />}
+            </div>
+          )}
+
+          {!teacher && !isAdmin && (
+            <div className="t-card-soft" style={{ padding: 16, fontSize: 13 }}>
+              Kelengkapan profil dan sertifikasi saat ini khusus untuk Pengajar.
+            </div>
+          )}
         </div>
       </div>
     </div>
+  );
+}
+
+
+function Sidebar({ user, view, setView, onLogout, mobileOpen, onClose }) {
+  const items = NAV_BY_ROLE[user.role];
+  function handleNav(id) {
+    setView(id);
+    onClose();
+  }
+  return (
+    <>
+      <div className={`sidebar-overlay ${mobileOpen ? "open" : ""}`} onClick={onClose} />
+      <div className={`no-print app-sidebar ${mobileOpen ? "open" : ""}`} style={{ width: 232, background: "var(--ink)", minHeight: "100vh", padding: 18, display: "flex", flexDirection: "column", flexShrink: 0 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 26, padding: "0 4px" }}>
+          <img src={RUTABA_LOGO} alt="Logo Rutaba" style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
+          <div>
+            <div className="font-display" style={{ color: "white", fontWeight: 700, fontSize: 15, lineHeight: 1.1 }}>Tahfidz</div>
+            <div style={{ color: "#B4AA8C", fontSize: 10 }}>SMK Telkom Malang</div>
+          </div>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
+          {items.map((it) => (
+            <div key={it.id} className={`t-nav-item ${view === it.id ? "active" : ""}`} onClick={() => handleNav(it.id)}>
+              <it.icon size={16} /> {it.label}
+            </div>
+          ))}
+        </div>
+        <div style={{ borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 14, marginTop: 14 }}>
+          <div style={{ color: "white", fontSize: 13, fontWeight: 600 }}>{user.nama}</div>
+          <div style={{ color: "#B4AA8C", fontSize: 11, marginBottom: 10 }}>{ROLE_LABEL[user.role]}</div>
+          <div className="t-nav-item" onClick={onLogout}>
+            <LogOut size={16} /> Keluar
+          </div>
+        </div>
+      </div>
+    </>
   );
 }
 
@@ -621,10 +906,10 @@ function DashboardAdmin({ db }) {
   const mk = currentMonthKey();
   const monthScores = db.scores.filter((s) => monthKey(s.tanggal) === mk);
   const monthAtt = db.attendance.filter((a) => monthKey(a.tanggal) === mk);
-  const perGroup = db.groups.map((g) => {
-    const members = groupMembers(db, g.id).map((m) => m.id);
-    const gs = monthScores.filter((s) => members.includes(s.studentId));
-    return { nama: g.nama, rataNilai: avg(gs.map((s) => s.nilai)) || 0 };
+  const perTeacher = db.teachers.map((t) => {
+    const ids = teacherStudents(db, t.id).map((m) => m.id);
+    const gs = monthScores.filter((s) => ids.includes(s.studentId));
+    return { nama: t.nama, rataNilai: avg(gs.map((s) => s.nilai)) || 0 };
   });
   const recent = [...db.scores].sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1)).slice(0, 6);
   const alerts = buildAlerts(db, db.students);
@@ -633,19 +918,19 @@ function DashboardAdmin({ db }) {
   return (
     <div>
       <SectionTitle sub="Ringkasan aktivitas tahfidz seluruh sekolah bulan ini">Dashboard Admin</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 14, marginBottom: 20 }}>
-        <StatCard icon={Users} label="Total Siswa" value={db.students.length} sub={`${db.groups.length} kelompok tahfidz`} />
+      <div className="grid-4" style={{ gap: 14, marginBottom: 20 }}>
+        <StatCard icon={Users} label="Total Siswa" value={db.students.length} sub={`${db.classes.length} kelas`} />
         <StatCard icon={GraduationCap} label="Pengajar & Mentor" value={db.teachers.length + db.mentors.length} sub={`${db.teachers.length} pengajar, ${db.mentors.length} mentor`} accent="gold" />
         <StatCard icon={CalendarCheck} label="Kehadiran Bulan Ini" value={`${attendancePct(monthAtt)}%`} sub={`${monthAtt.length} catatan presensi`} />
         <StatCard icon={BookOpen} label="Setoran Bulan Ini" value={monthScores.length} sub={`Rata-rata nilai ${avg(monthScores.map((s) => s.nilai))}`} accent="gold" />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1.1fr 1fr", gap: 14, marginBottom: 14 }}>
+      <div className="grid-2" style={{ gap: 14, marginBottom: 14 }}>
         <div className="t-card" style={{ padding: 18 }}>
-          <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>Rata-rata Nilai per Kelompok</div>
+          <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>Rata-rata Nilai per Pengajar</div>
           <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={perGroup}>
+            <BarChart data={perTeacher}>
               <CartesianGrid stroke="#E4DCC9" vertical={false} />
-              <XAxis dataKey="nama" tick={{ fontSize: 12 }} stroke="#8A8064" />
+              <XAxis dataKey="nama" tick={{ fontSize: 11 }} stroke="#8A8064" interval={0} angle={-15} textAnchor="end" height={50} />
               <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} stroke="#8A8064" />
               <Tooltip />
               <Bar dataKey="rataNilai" fill="#B08D57" radius={[6, 6, 0, 0]} />
@@ -689,8 +974,8 @@ function DashboardAdmin({ db }) {
 
 function DashboardPengajar({ db, user }) {
   const teacher = db.teachers.find((t) => t.id === user.refId);
-  const group = db.groups.find((g) => g.teacherId === teacher.id);
-  const members = groupMembers(db, group.id);
+  const classes = teacherClasses(db, teacher.id);
+  const members = teacherStudents(db, teacher.id);
   const mk = currentMonthKey();
   const memberIds = members.map((m) => m.id);
   const monthScores = db.scores.filter((s) => monthKey(s.tanggal) === mk && memberIds.includes(s.studentId));
@@ -700,13 +985,13 @@ function DashboardPengajar({ db, user }) {
 
   return (
     <div>
-      <SectionTitle sub={`${group.nama} · ${members.length} siswa binaan`}>Dashboard Pengajar</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 20 }}>
-        <StatCard icon={Users} label="Siswa Diampu" value={members.length} sub={group.nama} />
+      <SectionTitle sub={`${classListLabel(classes)} · ${members.length} siswa binaan`}>Dashboard Pengajar</SectionTitle>
+      <div className="grid-3" style={{ gap: 14, marginBottom: 20 }}>
+        <StatCard icon={Users} label="Siswa Diampu" value={members.length} sub={classListLabel(classes)} />
         <StatCard icon={CalendarCheck} label="Presensi Hari Ini" value={`${todayAtt.filter((a) => a.status === "HADIR").length}/${members.length}`} sub="Hadir hari ini" accent="gold" />
         <StatCard icon={BookOpen} label="Setoran Bulan Ini" value={monthScores.length} sub={`Rata-rata nilai ${avg(monthScores.map((s) => s.nilai))}`} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+      <div className="grid-2" style={{ gap: 14, marginBottom: 14 }}>
         <div className="t-card" style={{ padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontWeight: 700, fontSize: 14 }}>
             <AlertTriangle size={16} color="var(--red)" /> Perlu Perhatian
@@ -718,7 +1003,7 @@ function DashboardPengajar({ db, user }) {
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontWeight: 700, fontSize: 14 }}>
             <Trophy size={16} color="var(--gold)" /> Papan Peringkat Setoran
           </div>
-          <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 12 }}>Siswa paling rajin setor bulan ini di {group.nama}</div>
+          <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 12 }}>Siswa paling rajin setor bulan ini</div>
           <Leaderboard rows={leaderboard} />
         </div>
       </div>
@@ -757,12 +1042,12 @@ function DashboardMentor({ db, user }) {
   return (
     <div>
       <SectionTitle sub={`${students.length} siswa menjadi tanggung jawab Anda`}>Dashboard Mentor</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 20 }}>
+      <div className="grid-3" style={{ gap: 14, marginBottom: 20 }}>
         <StatCard icon={Users} label="Siswa Binaan" value={students.length} />
         <StatCard icon={BookOpen} label="Penilaian Bulan Ini" value={monthScores.length} accent="gold" />
         <StatCard icon={TrendingUp} label="Rata-rata Nilai" value={avg(monthScores.map((s) => s.nilai)) || "-"} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14, marginBottom: 14 }}>
+      <div className="grid-2" style={{ gap: 14, marginBottom: 14 }}>
         <div className="t-card" style={{ padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontWeight: 700, fontSize: 14 }}>
             <AlertTriangle size={16} color="var(--red)" /> Perlu Perhatian
@@ -781,7 +1066,7 @@ function DashboardMentor({ db, user }) {
       <div className="t-card" style={{ padding: 18 }}>
         <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>Daftar Siswa</div>
         <table className="t-table">
-          <thead><tr><th>Nama</th><th>Kelas</th><th>Kelompok</th><th>Setoran Terakhir</th></tr></thead>
+          <thead><tr><th>Nama</th><th>Kelas</th><th>Setoran Terakhir</th></tr></thead>
           <tbody>
             {students.map((s) => {
               const last = studentScores(db, s.id)[0];
@@ -789,7 +1074,6 @@ function DashboardMentor({ db, user }) {
                 <tr key={s.id}>
                   <td style={{ fontWeight: 600 }}>{s.nama}</td>
                   <td>{className(db, s.kelasId)}</td>
-                  <td>{groupName(db, s.groupId)}</td>
                   <td>{last ? `${surahName(db, last.surahId)} · ${fmtDate(last.tanggal)}` : "-"}</td>
                 </tr>
               );
@@ -812,13 +1096,13 @@ function DashboardSiswa({ db, user }) {
 
   return (
     <div>
-      <SectionTitle sub={`${className(db, student.kelasId)} · ${groupName(db, student.groupId)}`}>Assalamu'alaikum, {student.nama.split(" ")[0]}</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 14, marginBottom: 20 }}>
+      <SectionTitle sub={className(db, student.kelasId)}>Assalamu'alaikum, {student.nama.split(" ")[0]}</SectionTitle>
+      <div className="grid-3" style={{ gap: 14, marginBottom: 20 }}>
         <StatCard icon={BookOpen} label="Total Setoran" value={scores.length} sub={`${monthScores.length} bulan ini`} />
         <StatCard icon={Star} label="Rata-rata Nilai" value={avg(scores.map((s) => s.nilai)) || "-"} accent="gold" />
         <StatCard icon={CalendarCheck} label="Kehadiran Bulan Ini" value={`${attendancePct(monthAtt)}%`} />
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+      <div className="grid-2" style={{ gap: 14 }}>
         <div className="t-card" style={{ padding: 18 }}>
           <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>Perkembangan Nilai</div>
           {chartData.length ? (
@@ -846,9 +1130,8 @@ function DashboardSiswa({ db, user }) {
 /* ============================== PRESENSI HARIAN ============================== */
 function PresensiHarian({ db, refresh, user }) {
   const teacher = db.teachers.find((t) => t.id === user.refId);
-  const group = db.groups.find((g) => g.teacherId === teacher.id);
-  const members = groupMembers(db, group.id);
-  const availableClasses = db.classes.filter((c) => members.some((m) => m.kelasId === c.id));
+  const availableClasses = teacherClasses(db, teacher.id);
+  const members = teacherStudents(db, teacher.id);
   const [kelasFilter, setKelasFilter] = useState("all");
   const visibleMembers = kelasFilter === "all" ? members : members.filter((m) => m.kelasId === kelasFilter);
   const [tanggal, setTanggal] = useState(isoDaysAgo(0));
@@ -899,7 +1182,12 @@ function PresensiHarian({ db, refresh, user }) {
 
   return (
     <div>
-      <SectionTitle sub={`${group.nama} · tandai kehadiran lalu simpan`}>Presensi Harian</SectionTitle>
+      <SectionTitle sub={`${classListLabel(availableClasses)} · tandai kehadiran lalu simpan`}>Presensi Harian</SectionTitle>
+      {members.length === 0 && (
+        <div className="t-card-soft" style={{ padding: 16, marginBottom: 16, fontSize: 13 }}>
+          Belum ada kelas yang ditugaskan ke Anda. Hubungi Admin untuk menugaskan kelas lewat Master Data.
+        </div>
+      )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
           <input type="date" className="t-input" style={{ width: 180 }} value={tanggal} max={isoDaysAgo(0)} onChange={(e) => setTanggal(e.target.value)} />
@@ -956,7 +1244,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
   const isMentor = user.role === "mentor";
   const scopeStudents = isMentor
     ? mentorStudents(db, db.mentors.find((m) => m.id === user.refId).id)
-    : groupMembers(db, db.groups.find((g) => g.teacherId === user.refId).id);
+    : teacherStudents(db, user.refId);
 
   const availableClasses = db.classes.filter((c) => scopeStudents.some((s) => s.kelasId === c.id));
   const [kelasFilter, setKelasFilter] = useState("all");
@@ -1083,9 +1371,9 @@ function RekapView({ db, user }) {
   let sub = "";
   if (user.role === "admin") { students = db.students; sub = "Seluruh siswa"; }
   if (user.role === "pengajar") {
-    const group = db.groups.find((g) => g.teacherId === user.refId);
-    students = groupMembers(db, group.id);
-    sub = group.nama;
+    const classes = teacherClasses(db, user.refId);
+    students = teacherStudents(db, user.refId);
+    sub = classListLabel(classes);
   }
   if (user.role === "mentor") {
     students = mentorStudents(db, user.refId);
@@ -1200,7 +1488,10 @@ function reportNarrative(student, stats, mkLabel) {
 
 function ReportSheet({ db, student, mk }) {
   const stats = reportStats(db, student.id, mk);
-  const teacher = db.teachers.find((t) => t.id === db.groups.find((g) => g.id === student.groupId)?.teacherId);
+  const teacher = db.teachers.find((t) => t.id === classTeacherId(db, student.kelasId));
+  const teacherSignature = teacher ? db.profiles.find((p) => p.role === "pengajar" && p.refId === teacher.id)?.signatureUrl : null;
+  const adminSignature = db.profiles.find((p) => p.role === "admin")?.signatureUrl;
+  const stempelUrl = db.schoolSettings?.stempelUrl;
   const kategoriColor = {
     "Sangat Baik": "var(--teal)", "Baik": "var(--teal)", "Cukup": "#7A5E32",
     "Perlu Pendampingan": "var(--red)", "Belum Ada Data": "#8A8064",
@@ -1222,9 +1513,8 @@ function ReportSheet({ db, student, mk }) {
           <div><b>Nama</b> &nbsp;: {student.nama}</div>
           <div><b>NIS</b> &nbsp;&nbsp;&nbsp;: {student.nis}</div>
           <div><b>Kelas</b> &nbsp;: {className(db, student.kelasId)}</div>
-          <div><b>Kelompok</b> : {groupName(db, student.groupId)}</div>
-          <div><b>Jenis Kelamin</b> : {student.jenisKelamin === "L" ? "Laki-laki" : student.jenisKelamin === "P" ? "Perempuan" : "-"}</div>
           <div><b>Pengajar</b> : {teacher?.nama || "-"}</div>
+          <div><b>Jenis Kelamin</b> : {student.jenisKelamin === "L" ? "Laki-laki" : student.jenisKelamin === "P" ? "Perempuan" : "-"}</div>
         </div>
 
         <div style={{ display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 10, marginBottom: 18 }}>
@@ -1275,10 +1565,17 @@ function ReportSheet({ db, student, mk }) {
         <div className="report-sig">
           <div>
             <div>Pengajar / Pembina Tahfidz</div>
+            {teacherSignature ? (
+              <img src={teacherSignature} alt="Tanda tangan pengajar" style={{ height: 44, margin: "8px auto 0", display: "block", objectFit: "contain" }} />
+            ) : <div style={{ height: 44 }} />}
             <div className="line">{teacher?.nama || "-"}</div>
           </div>
-          <div>
+          <div style={{ position: "relative" }}>
             <div>Mengetahui, Kepala Program</div>
+            <div style={{ position: "relative", height: 44, marginTop: 8 }}>
+              {adminSignature && <img src={adminSignature} alt="Tanda tangan Kepala Program" style={{ height: 44, margin: "0 auto", display: "block", objectFit: "contain" }} />}
+              {stempelUrl && <img src={stempelUrl} alt="Stempel sekolah" style={{ height: 64, position: "absolute", left: "50%", top: "50%", transform: "translate(-70%,-50%) rotate(-8deg)", opacity: 0.9, objectFit: "contain" }} />}
+            </div>
             <div className="line">Kepala Program Keagamaan</div>
           </div>
         </div>
@@ -1292,8 +1589,8 @@ function ReportBulanan({ db, user }) {
   let sub = "";
   if (user.role === "admin") { students = db.students; sub = "Seluruh siswa"; }
   if (user.role === "pengajar") {
-    const group = db.groups.find((g) => g.teacherId === user.refId);
-    students = groupMembers(db, group.id); sub = group.nama;
+    const classes = teacherClasses(db, user.refId);
+    students = teacherStudents(db, user.refId); sub = classListLabel(classes);
   }
   if (user.role === "mentor") { students = mentorStudents(db, user.refId); sub = "Siswa binaan Anda"; }
 
@@ -1334,23 +1631,21 @@ function ReportBulanan({ db, user }) {
 /* ============================== ADMIN: MASTER DATA ============================== */
 function MasterData({ db, refresh }) {
   const [tab, setTab] = useState("siswa");
-  const [form, setForm] = useState({ nama: "", nis: "", kelasId: db.classes[0]?.id, groupId: db.groups[0]?.id, jenisKelamin: "L" });
-  const [newClass, setNewClass] = useState("");
-  const [newGroup, setNewGroup] = useState({ nama: "", teacherId: db.teachers[0]?.id });
+  const [form, setForm] = useState({ nama: "", nis: "", kelasId: db.classes[0]?.id, jenisKelamin: "L" });
+  const [newClass, setNewClass] = useState({ nama: "", teacherId: "" });
   const [preview, setPreview] = useState([]);
-  const [importGroupId, setImportGroupId] = useState(db.groups[0]?.id);
   const [importError, setImportError] = useState("");
   const [importMsg, setImportMsg] = useState("");
   const [busy, setBusy] = useState(false);
   const [selectedIds, setSelectedIds] = useState([]);
-  const [bulkGroupId, setBulkGroupId] = useState(db.groups[0]?.id);
+  const [bulkKelasId, setBulkKelasId] = useState(db.classes[0]?.id);
   const [rowBusyId, setRowBusyId] = useState(null);
 
   async function addStudent() {
     if (!form.nama.trim() || !form.nis.trim()) return;
     setBusy(true);
     try {
-      await insertStudent({ nis: form.nis, nama: form.nama, kelasId: form.kelasId, groupId: form.groupId, jenisKelamin: form.jenisKelamin });
+      await insertStudent({ nis: form.nis, nama: form.nama, kelasId: form.kelasId, jenisKelamin: form.jenisKelamin });
       await refresh();
       setForm({ ...form, nama: "", nis: "" });
     } catch (e) {
@@ -1370,12 +1665,12 @@ function MasterData({ db, refresh }) {
     setBusy(false);
   }
   async function addClass() {
-    if (!newClass.trim()) return;
+    if (!newClass.nama.trim()) return;
     setBusy(true);
     try {
-      await insertClass(newClass);
+      await insertClass(newClass.nama, newClass.teacherId || null);
       await refresh();
-      setNewClass("");
+      setNewClass({ nama: "", teacherId: "" });
     } catch (e) {
       alert("Gagal menambah kelas: " + e.message);
     }
@@ -1392,37 +1687,13 @@ function MasterData({ db, refresh }) {
     }
     setBusy(false);
   }
-  async function addGroup() {
-    if (!newGroup.nama.trim()) return;
-    setBusy(true);
+  async function handleAssignTeacher(kelasId, teacherId) {
+    setRowBusyId(kelasId);
     try {
-      await insertGroup(newGroup.nama, newGroup.teacherId);
-      await refresh();
-      setNewGroup({ ...newGroup, nama: "" });
-    } catch (e) {
-      alert("Gagal menambah kelompok: " + e.message);
-    }
-    setBusy(false);
-  }
-  async function removeGroup(id) {
-    if (!confirm("Hapus kelompok ini?")) return;
-    setBusy(true);
-    try {
-      await deleteGroup(id);
+      await updateClassTeacher(kelasId, teacherId || null);
       await refresh();
     } catch (e) {
-      alert("Gagal menghapus kelompok (mungkin masih ada siswa di dalamnya): " + e.message);
-    }
-    setBusy(false);
-  }
-
-  async function handleChangeGroup(studentId, groupId) {
-    setRowBusyId(studentId);
-    try {
-      await updateStudentGroup(studentId, groupId);
-      await refresh();
-    } catch (e) {
-      alert("Gagal memindahkan kelompok: " + e.message);
+      alert("Gagal menugaskan pengajar: " + e.message);
     }
     setRowBusyId(null);
   }
@@ -1447,7 +1718,7 @@ function MasterData({ db, refresh }) {
     if (!selectedIds.length) return;
     setBusy(true);
     try {
-      await bulkUpdateStudentGroup(selectedIds, bulkGroupId);
+      await bulkUpdateStudentClass(selectedIds, bulkKelasId);
       await refresh();
       setSelectedIds([]);
     } catch (e) {
@@ -1489,7 +1760,6 @@ function MasterData({ db, refresh }) {
             nama: String(getField(row, ["nama", "namasiswa", "name"])).trim(),
             nis: String(getField(row, ["nis", "nomorindukswa", "nomorindukssiswa", "nisn"])).trim(),
             kelas: String(getField(row, ["kelas", "class", "rombel"])).trim(),
-            kelompok: String(getField(row, ["kelompok", "group", "grup", "kelompoktahfidz"])).trim(),
             jenisKelamin: normalizeGender(getField(row, ["jeniskelamin", "gender", "jk", "lp"])),
           }))
           .filter((r) => r.nama);
@@ -1508,11 +1778,6 @@ function MasterData({ db, refresh }) {
     e.target.value = "";
   }
 
-  function matchGroupName(nama) {
-    if (!nama) return null;
-    return db.groups.find((g) => g.nama.toLowerCase() === nama.toLowerCase()) || null;
-  }
-
   async function commitImport() {
     setBusy(true);
     try {
@@ -1525,18 +1790,16 @@ function MasterData({ db, refresh }) {
           kelasObj = await findOrCreateClassByName(row.kelas, classes);
           if (!classes.some((c) => c.id === kelasObj.id)) classes = [...classes, kelasObj];
         }
-        const matchedGroup = matchGroupName(row.kelompok);
         rows.push({
           nis: row.nis || `IMP${String(Date.now()).slice(-6)}${i}`,
           nama: row.nama,
           jenisKelamin: row.jenisKelamin || "",
           kelasId: kelasObj ? kelasObj.id : (db.classes[0]?.id || ""),
-          groupId: matchedGroup ? matchedGroup.id : (importGroupId || db.groups[0]?.id),
         });
       }
       await bulkInsertStudents(rows);
       await refresh();
-      setImportMsg(`${rows.length} siswa berhasil diimpor.`);
+      setImportMsg(`${rows.length} siswa berhasil diimpor. Kalau ada kelas baru dari file, jangan lupa tugaskan pengajarnya di tab Kelas.`);
       setPreview([]);
     } catch (e) {
       setImportError("Gagal mengimpor: " + e.message);
@@ -1545,7 +1808,7 @@ function MasterData({ db, refresh }) {
   }
 
   function downloadTemplate() {
-    const csv = "Nama,NIS,Kelas,Jenis Kelamin,Kelompok\nContoh Siswa Satu,2201099,X RPL 1,Laki-laki," + (db.groups[0]?.nama || "Kelompok A") + "\nContoh Siswa Dua,2201098,XI TKJ 1,Perempuan," + (db.groups[1]?.nama || db.groups[0]?.nama || "Kelompok B") + "\n";
+    const csv = "Nama,NIS,Kelas,Jenis Kelamin\nContoh Siswa Satu,2201099,X RPL 1,Laki-laki\nContoh Siswa Dua,2201098,XI TKJ 1,Perempuan\n";
     const blob = new Blob([csv], { type: "text/csv;charset=utf-8;" });
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
@@ -1556,9 +1819,9 @@ function MasterData({ db, refresh }) {
 
   return (
     <div>
-      <SectionTitle sub="Kelola data induk: siswa, kelas, dan kelompok tahfidz">Master Data</SectionTitle>
+      <SectionTitle sub="Kelola data induk: siswa dan kelas. Setiap kelas ditugaskan ke satu pengajar.">Master Data</SectionTitle>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
-        {["siswa", "kelas", "kelompok"].map((t) => (
+        {["siswa", "kelas"].map((t) => (
           <button key={t} className="t-btn" style={{ background: tab === t ? "var(--ink)" : "var(--panel-soft)", color: tab === t ? "white" : "var(--ink)" }} onClick={() => setTab(t)}>
             {t[0].toUpperCase() + t.slice(1)}
           </button>
@@ -1566,7 +1829,7 @@ function MasterData({ db, refresh }) {
       </div>
 
       {tab === "siswa" && (
-        <div style={{ display: "grid", gridTemplateColumns: "300px 1fr", gap: 16 }}>
+        <div className="master-grid">
           <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
             <div className="t-card" style={{ padding: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Tambah Siswa Manual</div>
@@ -1580,9 +1843,6 @@ function MasterData({ db, refresh }) {
                 <select className="t-select" value={form.kelasId} onChange={(e) => setForm({ ...form, kelasId: e.target.value })}>
                   {db.classes.map((c) => <option key={c.id} value={c.id}>{c.nama}</option>)}
                 </select>
-                <select className="t-select" value={form.groupId} onChange={(e) => setForm({ ...form, groupId: e.target.value })}>
-                  {db.groups.map((g) => <option key={g.id} value={g.id}>{g.nama}</option>)}
-                </select>
                 <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={addStudent} disabled={busy}><Plus size={14} /> Tambah</button>
               </div>
             </div>
@@ -1590,55 +1850,39 @@ function MasterData({ db, refresh }) {
             <div className="t-card" style={{ padding: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Import dari File</div>
               <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 10 }}>
-                Format .xlsx, .xls, atau .csv dengan kolom Nama, NIS (opsional), Kelas, Jenis Kelamin, dan Kelompok.
+                Format .xlsx, .xls, atau .csv dengan kolom Nama, NIS (opsional), Kelas, dan Jenis Kelamin.
               </div>
               <button className="t-btn t-btn-ghost" style={{ width: "100%", justifyContent: "center", marginBottom: 8 }} onClick={downloadTemplate}>
                 <FileText size={14} /> Unduh Template
               </button>
-              <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Kelompok cadangan (kalau kolom Kelompok di file kosong/tidak cocok)</label>
-                <select className="t-select" style={{ marginBottom: 8 }} value={importGroupId} onChange={(e) => setImportGroupId(e.target.value)}>
-                  {db.groups.map((g) => <option key={g.id} value={g.id}>{g.nama}</option>)}
-                </select>
-              </div>
               <input type="file" accept=".xlsx,.xls,.csv" className="t-input" style={{ padding: 6 }} onChange={handleFile} />
               {importError && <div style={{ fontSize: 12, color: "var(--red)", marginTop: 8, fontWeight: 600 }}>{importError}</div>}
               {importMsg && <div style={{ fontSize: 12, color: "var(--teal)", marginTop: 8, fontWeight: 600 }}>{importMsg}</div>}
             </div>
           </div>
 
-          <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
+          <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
             {preview.length > 0 && (
               <div className="t-card-soft" style={{ padding: 16 }}>
-                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10 }}>
+                <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 10, flexWrap: "wrap", gap: 8 }}>
                   <div style={{ fontWeight: 700, fontSize: 13 }}>Pratinjau Import &mdash; {preview.length} siswa terdeteksi</div>
                   <div style={{ display: "flex", gap: 8 }}>
                     <button className="t-btn t-btn-ghost" onClick={() => setPreview([])}>Batalkan</button>
                     <button className="t-btn t-btn-primary" onClick={commitImport} disabled={busy}><CheckCircle2 size={14} /> {busy ? "Mengimpor..." : `Import ${preview.length} Siswa`}</button>
                   </div>
                 </div>
-                <div style={{ maxHeight: 260, overflowY: "auto" }} className="t-scrollbar">
+                <div style={{ maxHeight: 260, overflow: "auto" }} className="t-scrollbar">
                   <table className="t-table">
-                    <thead><tr><th>Nama</th><th>NIS</th><th>Kelas</th><th>L/P</th><th>Kelompok</th></tr></thead>
+                    <thead><tr><th>Nama</th><th>NIS</th><th>Kelas</th><th>L/P</th></tr></thead>
                     <tbody>
-                      {preview.map((r, i) => {
-                        const matched = matchGroupName(r.kelompok);
-                        return (
-                          <tr key={i}>
-                            <td style={{ fontWeight: 600 }}>{r.nama}</td>
-                            <td className="font-mono">{r.nis || <span style={{ color: "#B4AA8C" }}>otomatis</span>}</td>
-                            <td>{r.kelas || <span style={{ color: "var(--red)" }}>kosong</span>}</td>
-                            <td>{r.jenisKelamin || <span style={{ color: "var(--red)" }}>?</span>}</td>
-                            <td>
-                              {matched ? matched.nama : (
-                                <span style={{ color: r.kelompok ? "var(--red)" : "#B4AA8C" }}>
-                                  {r.kelompok ? `"${r.kelompok}" tidak cocok, pakai cadangan` : "pakai cadangan"}
-                                </span>
-                              )}
-                            </td>
-                          </tr>
-                        );
-                      })}
+                      {preview.map((r, i) => (
+                        <tr key={i}>
+                          <td style={{ fontWeight: 600 }}>{r.nama}</td>
+                          <td className="font-mono">{r.nis || <span style={{ color: "#B4AA8C" }}>otomatis</span>}</td>
+                          <td>{r.kelas || <span style={{ color: "var(--red)" }}>kosong</span>}</td>
+                          <td>{r.jenisKelamin || <span style={{ color: "var(--red)" }}>?</span>}</td>
+                        </tr>
+                      ))}
                     </tbody>
                   </table>
                 </div>
@@ -1648,24 +1892,25 @@ function MasterData({ db, refresh }) {
             {selectedIds.length > 0 && (
               <div className="t-card" style={{ padding: 14, display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", borderColor: "var(--gold)" }}>
                 <span style={{ fontSize: 13, fontWeight: 700 }}>{selectedIds.length} siswa dipilih</span>
-                <select className="t-select" style={{ width: 220 }} value={bulkGroupId} onChange={(e) => setBulkGroupId(e.target.value)}>
-                  {db.groups.map((g) => <option key={g.id} value={g.id}>{g.nama}</option>)}
+                <select className="t-select" style={{ width: 220 }} value={bulkKelasId} onChange={(e) => setBulkKelasId(e.target.value)}>
+                  {db.classes.map((c) => <option key={c.id} value={c.id}>{c.nama}</option>)}
                 </select>
                 <button className="t-btn t-btn-gold" onClick={bulkMove} disabled={busy}>
-                  {busy ? "Memindahkan..." : "Pindahkan ke Kelompok Ini"}
+                  {busy ? "Memindahkan..." : "Pindahkan ke Kelas Ini"}
                 </button>
                 <button className="t-btn t-btn-ghost" onClick={() => setSelectedIds([])}>Batal Pilih</button>
               </div>
             )}
 
             <div className="t-card" style={{ padding: 8 }}>
-              <table className="t-table">
+              <div style={{ overflowX: "auto" }} className="t-scrollbar">
+              <table className="t-table" style={{ minWidth: 560 }}>
                 <thead>
                   <tr>
                     <th style={{ width: 28 }}>
                       <input type="checkbox" checked={selectedIds.length === db.students.length && db.students.length > 0} onChange={toggleSelectAll} />
                     </th>
-                    <th>NIS</th><th>Nama</th><th>L/P</th><th>Kelas</th><th>Kelompok</th><th></th>
+                    <th>NIS</th><th>Nama</th><th>L/P</th><th>Kelas</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -1684,83 +1929,63 @@ function MasterData({ db, refresh }) {
                           {db.classes.map((c) => <option key={c.id} value={c.id}>{c.nama}</option>)}
                         </select>
                       </td>
-                      <td>
-                        <select
-                          className="t-select" style={{ fontSize: 12, padding: "5px 8px" }}
-                          value={s.groupId || ""} disabled={rowBusyId === s.id}
-                          onChange={(e) => handleChangeGroup(s.id, e.target.value)}
-                        >
-                          {db.groups.map((g) => <option key={g.id} value={g.id}>{g.nama}</option>)}
-                        </select>
-                      </td>
                       <td><button className="t-btn t-btn-danger" style={{ padding: "5px 8px" }} onClick={() => removeStudent(s.id)}><Trash2 size={13} /></button></td>
                     </tr>
                   ))}
                 </tbody>
               </table>
+              </div>
             </div>
           </div>
         </div>
       )}
 
       {tab === "kelas" && (
-        <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 16 }}>
+        <div className="master-grid">
           <div className="t-card" style={{ padding: 16, height: "fit-content" }}>
             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Tambah Kelas</div>
             <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <input className="t-input" placeholder="Nama kelas (mis. X RPL 2)" value={newClass} onChange={(e) => setNewClass(e.target.value)} />
+              <input className="t-input" placeholder="Nama kelas (mis. X RPL 2)" value={newClass.nama} onChange={(e) => setNewClass({ ...newClass, nama: e.target.value })} />
+              <select className="t-select" value={newClass.teacherId} onChange={(e) => setNewClass({ ...newClass, teacherId: e.target.value })}>
+                <option value="">Belum ditugaskan</option>
+                {db.teachers.map((t) => <option key={t.id} value={t.id}>{t.nama}</option>)}
+              </select>
               <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={addClass} disabled={busy}><Plus size={14} /> Tambah</button>
             </div>
           </div>
-          <div className="t-card" style={{ padding: 8 }}>
-            <table className="t-table">
-              <thead><tr><th>Nama Kelas</th><th>Jumlah Siswa</th><th></th></tr></thead>
+          <div className="t-card" style={{ padding: 8, overflowX: "auto" }}>
+            <div style={{ overflowX: "auto" }} className="t-scrollbar">
+            <table className="t-table" style={{ minWidth: 480 }}>
+              <thead><tr><th>Nama Kelas</th><th>Pengajar</th><th>Jumlah Siswa</th><th></th></tr></thead>
               <tbody>
                 {db.classes.map((c) => (
                   <tr key={c.id}>
                     <td style={{ fontWeight: 600 }}>{c.nama}</td>
+                    <td>
+                      <select
+                        className="t-select" style={{ fontSize: 12, padding: "5px 8px" }}
+                        value={c.teacherId || ""} disabled={rowBusyId === c.id}
+                        onChange={(e) => handleAssignTeacher(c.id, e.target.value)}
+                      >
+                        <option value="">Belum ditugaskan</option>
+                        {db.teachers.map((t) => <option key={t.id} value={t.id}>{t.nama}</option>)}
+                      </select>
+                    </td>
                     <td>{db.students.filter((s) => s.kelasId === c.id).length}</td>
                     <td><button className="t-btn t-btn-danger" style={{ padding: "5px 8px" }} onClick={() => removeClass(c.id)}><Trash2 size={13} /></button></td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
-        </div>
-      )}
-
-      {tab === "kelompok" && (
-        <div style={{ display: "grid", gridTemplateColumns: "280px 1fr", gap: 16 }}>
-          <div className="t-card" style={{ padding: 16, height: "fit-content" }}>
-            <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 10 }}>Tambah Kelompok</div>
-            <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-              <input className="t-input" placeholder="Nama kelompok" value={newGroup.nama} onChange={(e) => setNewGroup({ ...newGroup, nama: e.target.value })} />
-              <select className="t-select" value={newGroup.teacherId} onChange={(e) => setNewGroup({ ...newGroup, teacherId: e.target.value })}>
-                {db.teachers.map((t) => <option key={t.id} value={t.id}>{t.nama}</option>)}
-              </select>
-              <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={addGroup} disabled={busy}><Plus size={14} /> Tambah</button>
             </div>
-          </div>
-          <div className="t-card" style={{ padding: 8 }}>
-            <table className="t-table">
-              <thead><tr><th>Kelompok</th><th>Pengajar</th><th>Jumlah Siswa</th><th></th></tr></thead>
-              <tbody>
-                {db.groups.map((g) => (
-                  <tr key={g.id}>
-                    <td style={{ fontWeight: 600 }}>{g.nama}</td>
-                    <td>{db.teachers.find((t) => t.id === g.teacherId)?.nama}</td>
-                    <td>{groupMembers(db, g.id).length}</td>
-                    <td><button className="t-btn t-btn-danger" style={{ padding: "5px 8px" }} onClick={() => removeGroup(g.id)}><Trash2 size={13} /></button></td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
           </div>
         </div>
       )}
     </div>
   );
 }
+
+/* ============================== ADMIN: MANAJEMEN USER ============================== */
 
 /* ============================== ADMIN: MANAJEMEN USER ============================== */
 function ManajemenUser({ db, refresh }) {
@@ -1885,14 +2110,14 @@ function ManajemenUser({ db, refresh }) {
 /* ============================== ADMIN: MONITORING ============================== */
 function Monitoring({ db }) {
   const mk = currentMonthKey();
-  const rows = db.groups.map((g) => {
-    const members = groupMembers(db, g.id);
+  const rows = db.classes.map((c) => {
+    const members = db.students.filter((s) => s.kelasId === c.id);
     const ids = members.map((m) => m.id);
     const att = db.attendance.filter((a) => monthKey(a.tanggal) === mk && ids.includes(a.studentId));
     const sc = db.scores.filter((s) => monthKey(s.tanggal) === mk && ids.includes(s.studentId));
     return {
-      nama: g.nama,
-      pengajar: db.teachers.find((t) => t.id === g.teacherId)?.nama,
+      nama: c.nama,
+      pengajar: teacherName(db, c.teacherId),
       jumlahSiswa: members.length,
       kehadiran: attendancePct(att),
       setoran: sc.length,
@@ -1901,21 +2126,22 @@ function Monitoring({ db }) {
   });
   return (
     <div>
-      <SectionTitle sub="Perbandingan performa antar kelompok tahfidz bulan ini">Monitoring</SectionTitle>
+      <SectionTitle sub="Perbandingan performa antar kelas bulan ini">Monitoring</SectionTitle>
       <div className="t-card" style={{ padding: 18, marginBottom: 16 }}>
         <ResponsiveContainer width="100%" height={220}>
           <BarChart data={rows}>
             <CartesianGrid stroke="#E4DCC9" vertical={false} />
-            <XAxis dataKey="nama" tick={{ fontSize: 12 }} stroke="#8A8064" />
+            <XAxis dataKey="nama" tick={{ fontSize: 11 }} stroke="#8A8064" interval={0} angle={-15} textAnchor="end" height={50} />
             <YAxis tick={{ fontSize: 12 }} stroke="#8A8064" />
             <Tooltip />
             <Bar dataKey="setoran" fill="#2F6F63" radius={[6, 6, 0, 0]} name="Jumlah Setoran" />
           </BarChart>
         </ResponsiveContainer>
       </div>
-      <div className="t-card" style={{ padding: 8 }}>
-        <table className="t-table">
-          <thead><tr><th>Kelompok</th><th>Pengajar</th><th>Siswa</th><th>Kehadiran</th><th>Setoran</th><th>Rata-rata Nilai</th></tr></thead>
+      <div className="t-card" style={{ padding: 8, overflowX: "auto" }}>
+        <div style={{ overflowX: "auto" }} className="t-scrollbar">
+        <table className="t-table" style={{ minWidth: 560 }}>
+          <thead><tr><th>Kelas</th><th>Pengajar</th><th>Siswa</th><th>Kehadiran</th><th>Setoran</th><th>Rata-rata Nilai</th></tr></thead>
           <tbody>
             {rows.map((r) => (
               <tr key={r.nama}>
@@ -1929,6 +2155,7 @@ function Monitoring({ db }) {
             ))}
           </tbody>
         </table>
+        </div>
       </div>
     </div>
   );
@@ -1942,6 +2169,7 @@ export default function TahfidzApp() {
   const [authError, setAuthError] = useState("");
   const [view, setView] = useState("dashboard");
   const [recoveryMode, setRecoveryMode] = useState(false);
+  const [mobileNavOpen, setMobileNavOpen] = useState(false);
 
   async function refresh() {
     try {
@@ -2066,15 +2294,28 @@ export default function TahfidzApp() {
     content = <Monitoring db={db} />;
   } else if (view === "report") {
     content = <ReportBulanan db={db} user={user} />;
+  } else if (view === "profil") {
+    content = <ProfilSaya db={db} refresh={refresh} user={user} />;
   } else if (view === "password") {
     content = <GantiPassword />;
   }
 
   return (
-    <div className="tahfidz-root" style={{ display: "flex" }}>
+    <div className="tahfidz-root" style={{ display: "flex", flexDirection: "column" }}>
       <GlobalStyle />
-      <Sidebar user={user} view={view} setView={setView} onLogout={handleLogout} />
-      <div style={{ flex: 1, padding: 28, maxWidth: 1180 }}>{content}</div>
+      <div className="app-topbar no-print">
+        <button onClick={() => setMobileNavOpen(true)} aria-label="Buka menu">
+          <Menu size={22} />
+        </button>
+        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
+          <img src={RUTABA_LOGO} alt="Logo" style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover" }} />
+          <span className="font-display" style={{ color: "white", fontWeight: 700, fontSize: 15 }}>Tahfidz</span>
+        </div>
+      </div>
+      <div style={{ display: "flex", flex: 1 }}>
+        <Sidebar user={user} view={view} setView={setView} onLogout={handleLogout} mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
+        <div className="app-content" style={{ flex: 1, padding: 28, maxWidth: 1180, minWidth: 0 }}>{content}</div>
+      </div>
     </div>
   );
 }
