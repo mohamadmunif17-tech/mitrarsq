@@ -16,7 +16,7 @@ import {
   fetchAllData, saveAttendanceBatch, insertScore, insertStudent, bulkInsertStudents,
   deleteStudent, insertClass, deleteClass, findOrCreateClassByName, updateClassTeacher,
   setProfileStatus, changeOwnPassword, sendPasswordResetEmail, createUserAccount,
-  updateStudentClass, bulkUpdateStudentClass,
+  updateStudentClass, bulkUpdateStudentClass, bulkDeleteStudents,
   uploadFile, updateOwnSignature, updateTeacherProfile, addCertification, deleteCertification,
   updateSchoolStamp, fetchRiwayatPendidikan, addRiwayatPendidikan, deleteRiwayatPendidikan,
 } from "./db.js";
@@ -1685,7 +1685,8 @@ function ReportSheet({ db, student, mk }) {
         <div style={{ textAlign: "right", fontSize: 12.5, marginTop: 24 }}>
           Malang, {todayLongID()}
         </div>
-        <div className="report-sig">
+        <div style={{ textAlign: "center", fontSize: 12.5, marginTop: 10 }}>Mengetahui,</div>
+        <div className="report-sig" style={{ marginTop: 8 }}>
           <div>
             <div>Pengajar Tahfidz</div>
             {teacherSignature ? (
@@ -1694,7 +1695,7 @@ function ReportSheet({ db, student, mk }) {
             <div className="line">{teacher?.nama || "-"}</div>
           </div>
           <div style={{ position: "relative" }}>
-            <div>Mengetahui, PIC Tahfidz</div>
+            <div>PIC Tahfidz</div>
             <div style={{ position: "relative", height: 44, marginTop: 8 }}>
               {adminSignature && <img src={adminSignature} alt="Tanda tangan PIC Tahfidz" style={{ height: 44, margin: "0 auto", display: "block", objectFit: "contain" }} />}
               {stempelUrl && <img src={stempelUrl} alt="Stempel sekolah" style={{ height: 64, position: "absolute", left: "50%", top: "50%", transform: "translate(-70%,-50%) rotate(-8deg)", opacity: 0.9, objectFit: "contain" }} />}
@@ -1846,6 +1847,19 @@ function MasterData({ db, refresh }) {
       setSelectedIds([]);
     } catch (e) {
       alert("Gagal memindahkan siswa terpilih: " + e.message);
+    }
+    setBusy(false);
+  }
+  async function bulkDelete() {
+    if (!selectedIds.length) return;
+    if (!confirm(`Hapus ${selectedIds.length} siswa terpilih beserta seluruh riwayat presensi & nilainya? Tindakan ini tidak bisa dibatalkan.`)) return;
+    setBusy(true);
+    try {
+      await bulkDeleteStudents(selectedIds);
+      await refresh();
+      setSelectedIds([]);
+    } catch (e) {
+      alert("Gagal menghapus siswa terpilih: " + e.message);
     }
     setBusy(false);
   }
@@ -2020,6 +2034,9 @@ function MasterData({ db, refresh }) {
                 </select>
                 <button className="t-btn t-btn-gold" onClick={bulkMove} disabled={busy}>
                   {busy ? "Memindahkan..." : "Pindahkan ke Kelas Ini"}
+                </button>
+                <button className="t-btn t-btn-danger" onClick={bulkDelete} disabled={busy}>
+                  <Trash2 size={13} /> {busy ? "Menghapus..." : "Hapus Terpilih"}
                 </button>
                 <button className="t-btn t-btn-ghost" onClick={() => setSelectedIds([])}>Batal Pilih</button>
               </div>

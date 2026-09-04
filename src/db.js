@@ -112,6 +112,10 @@ export async function bulkUpdateStudentClass(studentIds, kelasId) {
   const res = await supabase.from("students").update({ kelas_id: kelasId }).in("id", studentIds);
   mustOk(res, "bulkUpdateStudentClass");
 }
+export async function bulkDeleteStudents(studentIds) {
+  const res = await supabase.from("students").delete().in("id", studentIds);
+  mustOk(res, "bulkDeleteStudents");
+}
 
 /* ---------- MASTER DATA: KELAS (pengajar ditugaskan langsung ke kelas) ---------- */
 export async function insertClass(nama, teacherId = null) {
