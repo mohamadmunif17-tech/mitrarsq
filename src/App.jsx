@@ -18,7 +18,7 @@ import {
   setProfileStatus, changeOwnPassword, sendPasswordResetEmail, createUserAccount,
   updateStudentClass, bulkUpdateStudentClass,
   uploadFile, updateOwnSignature, updateTeacherProfile, addCertification, deleteCertification,
-  updateSchoolStamp,
+  updateSchoolStamp, fetchRiwayatPendidikan, addRiwayatPendidikan, deleteRiwayatPendidikan,
 } from "./db.js";
 
 
@@ -204,6 +204,9 @@ const STATUS_META = {
 
 function fmtDate(iso) {
   return new Date(iso + "T00:00:00").toLocaleDateString("id-ID", { day: "2-digit", month: "short", year: "numeric" });
+}
+function todayLongID() {
+  return new Date().toLocaleDateString("id-ID", { day: "numeric", month: "long", year: "numeric" });
 }
 function monthKey(iso) {
   return iso.slice(0, 7);
@@ -670,7 +673,17 @@ function ProfilSaya({ db, refresh, user }) {
   const myProfile = db.profiles.find((p) => p.id === user.id);
 
   const [form, setForm] = useState({
-    noHp: teacher?.noHp || "", pendidikanTerakhir: teacher?.pendidikanTerakhir || "", alamat: teacher?.alamat || "",
+    namaPanggilan: teacher?.namaPanggilan || "",
+    nik: teacher?.nik || "",
+    tempatLahir: teacher?.tempatLahir || "",
+    tanggalLahir: teacher?.tanggalLahir || "",
+    agama: teacher?.agama || "",
+    statusPernikahan: teacher?.statusPernikahan || "",
+    noHp: teacher?.noHp || "",
+    pendidikanTerakhir: teacher?.pendidikanTerakhir || "",
+    alamat: teacher?.alamat || "",
+    kota: teacher?.kota || "",
+    provinsi: teacher?.provinsi || "",
   });
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
@@ -681,6 +694,10 @@ function ProfilSaya({ db, refresh, user }) {
   const [certForm, setCertForm] = useState({ nama: "", penyelenggara: "", tahun: new Date().getFullYear() });
   const [addingCert, setAddingCert] = useState(false);
   const myCerts = teacher ? db.certifications.filter((c) => c.teacherId === teacher.id).sort((a, b) => (b.tahun || 0) - (a.tahun || 0)) : [];
+
+  const [eduForm, setEduForm] = useState({ jenjang: "S1", institusi: "", jurusan: "", tahunLulus: "" });
+  const [addingEdu, setAddingEdu] = useState(false);
+  const myEdu = teacher ? (db.riwayatPendidikan || []).filter((r) => r.teacherId === teacher.id).sort((a, b) => (b.tahunLulus || 0) - (a.tahunLulus || 0)) : [];
 
   async function handleFotoUpload(e) {
     const file = e.target.files[0];
@@ -763,6 +780,29 @@ function ProfilSaya({ db, refresh, user }) {
     }
   }
 
+  async function submitEdu(e) {
+    e.preventDefault();
+    if (!teacher || !eduForm.institusi.trim()) return;
+    setAddingEdu(true);
+    try {
+      await addRiwayatPendidikan(teacher.id, eduForm);
+      await refresh();
+      setEduForm({ jenjang: "S1", institusi: "", jurusan: "", tahunLulus: "" });
+    } catch (err) {
+      alert("Gagal menambah riwayat pendidikan: " + err.message);
+    }
+    setAddingEdu(false);
+  }
+  async function removeEdu(id) {
+    if (!confirm("Hapus riwayat pendidikan ini?")) return;
+    try {
+      await deleteRiwayatPendidikan(id);
+      await refresh();
+    } catch (err) {
+      alert("Gagal menghapus: " + err.message);
+    }
+  }
+
   return (
     <div>
       <SectionTitle sub="Kelola foto, kontak, tanda tangan digital, dan sertifikasi Anda">Profil Saya</SectionTitle>
@@ -800,19 +840,64 @@ function ProfilSaya({ db, refresh, user }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 16, minWidth: 0 }}>
           {teacher && (
             <form onSubmit={saveProfile} className="t-card" style={{ padding: 18 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Data Kontak & Pendidikan</div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Data Pribadi</div>
+              <div style={{ display: "flex", flexDirection: "column", gap: 10, marginBottom: 18 }}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Nama Panggilan</label>
+                    <input className="t-input" value={form.namaPanggilan} onChange={(e) => setForm({ ...form, namaPanggilan: e.target.value })} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>NIK</label>
+                    <input className="t-input" value={form.nik} onChange={(e) => setForm({ ...form, nik: e.target.value })} placeholder="16 digit" />
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Tempat Lahir</label>
+                    <input className="t-input" value={form.tempatLahir} onChange={(e) => setForm({ ...form, tempatLahir: e.target.value })} />
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Tanggal Lahir</label>
+                    <input type="date" className="t-input" value={form.tanggalLahir || ""} onChange={(e) => setForm({ ...form, tanggalLahir: e.target.value })} />
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Agama</label>
+                    <select className="t-select" value={form.agama} onChange={(e) => setForm({ ...form, agama: e.target.value })}>
+                      <option value="">Pilih</option>
+                      <option>Islam</option><option>Kristen</option><option>Katolik</option>
+                      <option>Hindu</option><option>Buddha</option><option>Konghucu</option>
+                    </select>
+                  </div>
+                  <div style={{ flex: 1 }}>
+                    <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Status Pernikahan</label>
+                    <select className="t-select" value={form.statusPernikahan} onChange={(e) => setForm({ ...form, statusPernikahan: e.target.value })}>
+                      <option value="">Pilih</option>
+                      <option>Belum Menikah</option><option>Menikah</option><option>Cerai</option>
+                    </select>
+                  </div>
+                </div>
+              </div>
+
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Kontak, Pendidikan & Alamat</div>
               <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}><Phone size={11} style={{ verticalAlign: -1 }} /> No. HP / WhatsApp</label>
                   <input className="t-input" value={form.noHp} onChange={(e) => setForm({ ...form, noHp: e.target.value })} placeholder="08xxxxxxxxxx" />
                 </div>
                 <div>
-                  <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}><GraduationCap size={11} style={{ verticalAlign: -1 }} /> Pendidikan Terakhir</label>
+                  <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}><GraduationCap size={11} style={{ verticalAlign: -1 }} /> Pendidikan Terakhir (ringkas)</label>
                   <input className="t-input" value={form.pendidikanTerakhir} onChange={(e) => setForm({ ...form, pendidikanTerakhir: e.target.value })} placeholder="mis. S1 Pendidikan Agama Islam" />
                 </div>
                 <div>
                   <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}><MapPin size={11} style={{ verticalAlign: -1 }} /> Alamat</label>
-                  <textarea className="t-input" style={{ minHeight: 70, resize: "vertical", fontFamily: "inherit" }} value={form.alamat} onChange={(e) => setForm({ ...form, alamat: e.target.value })} />
+                  <textarea className="t-input" style={{ minHeight: 60, resize: "vertical", fontFamily: "inherit" }} value={form.alamat} onChange={(e) => setForm({ ...form, alamat: e.target.value })} />
+                </div>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <input className="t-input" placeholder="Kota" value={form.kota} onChange={(e) => setForm({ ...form, kota: e.target.value })} />
+                  <input className="t-input" placeholder="Provinsi" value={form.provinsi} onChange={(e) => setForm({ ...form, provinsi: e.target.value })} />
                 </div>
                 {saveMsg && <div style={{ fontSize: 12.5, color: saveMsg.includes("tersimpan") ? "var(--teal)" : "var(--red)", fontWeight: 600 }}>{saveMsg}</div>}
                 <button type="submit" className="t-btn t-btn-primary" style={{ justifyContent: "center" }} disabled={saving}>
@@ -825,7 +910,42 @@ function ProfilSaya({ db, refresh, user }) {
           {teacher && (
             <div className="t-card" style={{ padding: 18 }}>
               <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 13, marginBottom: 12 }}>
-                <Award size={16} color="var(--gold)" /> Sertifikasi yang Pernah Diikuti
+                <GraduationCap size={16} color="var(--teal)" /> Riwayat Pendidikan
+              </div>
+              <form onSubmit={submitEdu} style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid var(--line)" }}>
+                <div style={{ display: "flex", gap: 8 }}>
+                  <select className="t-select" style={{ flex: 1 }} value={eduForm.jenjang} onChange={(e) => setEduForm({ ...eduForm, jenjang: e.target.value })}>
+                    <option>SD</option><option>SMP</option><option>SMA/SMK</option>
+                    <option>D3</option><option>S1</option><option>S2</option><option>S3</option>
+                  </select>
+                  <input className="t-input" placeholder="Tahun Lulus" type="number" value={eduForm.tahunLulus} onChange={(e) => setEduForm({ ...eduForm, tahunLulus: e.target.value })} style={{ flex: 1 }} />
+                </div>
+                <input className="t-input" placeholder="Nama Institusi/Sekolah/Kampus" value={eduForm.institusi} onChange={(e) => setEduForm({ ...eduForm, institusi: e.target.value })} required />
+                <input className="t-input" placeholder="Jurusan (opsional)" value={eduForm.jurusan} onChange={(e) => setEduForm({ ...eduForm, jurusan: e.target.value })} />
+                <button type="submit" className="t-btn t-btn-primary" style={{ justifyContent: "center" }} disabled={addingEdu}>
+                  <Plus size={14} /> {addingEdu ? "Menyimpan..." : "Tambah Riwayat Pendidikan"}
+                </button>
+              </form>
+              {myEdu.length ? (
+                <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+                  {myEdu.map((r) => (
+                    <div key={r.id} style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+                      <div>
+                        <div style={{ fontWeight: 600, fontSize: 13 }}>{r.jenjang} &mdash; {r.institusi}</div>
+                        <div style={{ fontSize: 11.5, color: "#8A8064" }}>{[r.jurusan, r.tahunLulus].filter(Boolean).join(" · ")}</div>
+                      </div>
+                      <button className="t-btn t-btn-danger" style={{ padding: "4px 8px" }} onClick={() => removeEdu(r.id)}><Trash2 size={12} /></button>
+                    </div>
+                  ))}
+                </div>
+              ) : <Empty text="Belum ada riwayat pendidikan ditambahkan." />}
+            </div>
+          )}
+
+          {teacher && (
+            <div className="t-card" style={{ padding: 18 }}>
+              <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 13, marginBottom: 12 }}>
+                <Award size={16} color="var(--gold)" /> Sertifikasi / Pelatihan yang Pernah Diikuti
               </div>
               <form onSubmit={submitCert} style={{ display: "flex", flexDirection: "column", gap: 8, marginBottom: 16, paddingBottom: 16, borderBottom: "1px solid var(--line)" }}>
                 <input className="t-input" placeholder="Nama sertifikasi/pelatihan" value={certForm.nama} onChange={(e) => setCertForm({ ...certForm, nama: e.target.value })} required />
@@ -1562,21 +1682,24 @@ function ReportSheet({ db, student, mk }) {
           </tbody>
         </table>
 
+        <div style={{ textAlign: "right", fontSize: 12.5, marginTop: 24 }}>
+          Malang, {todayLongID()}
+        </div>
         <div className="report-sig">
           <div>
-            <div>Pengajar / Pembina Tahfidz</div>
+            <div>Pengajar Tahfidz</div>
             {teacherSignature ? (
               <img src={teacherSignature} alt="Tanda tangan pengajar" style={{ height: 44, margin: "8px auto 0", display: "block", objectFit: "contain" }} />
             ) : <div style={{ height: 44 }} />}
             <div className="line">{teacher?.nama || "-"}</div>
           </div>
           <div style={{ position: "relative" }}>
-            <div>Mengetahui, Kepala Program</div>
+            <div>Mengetahui, PIC Tahfidz</div>
             <div style={{ position: "relative", height: 44, marginTop: 8 }}>
-              {adminSignature && <img src={adminSignature} alt="Tanda tangan Kepala Program" style={{ height: 44, margin: "0 auto", display: "block", objectFit: "contain" }} />}
+              {adminSignature && <img src={adminSignature} alt="Tanda tangan PIC Tahfidz" style={{ height: 44, margin: "0 auto", display: "block", objectFit: "contain" }} />}
               {stempelUrl && <img src={stempelUrl} alt="Stempel sekolah" style={{ height: 64, position: "absolute", left: "50%", top: "50%", transform: "translate(-70%,-50%) rotate(-8deg)", opacity: 0.9, objectFit: "contain" }} />}
             </div>
-            <div className="line">Kepala Program Keagamaan</div>
+            <div className="line">PIC Tahfidz</div>
           </div>
         </div>
       </div>

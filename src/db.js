@@ -10,7 +10,7 @@ function mustOk(result, label) {
 
 /* ---------- FETCH SEMUA DATA (dipanggil ulang setelah tiap mutasi) ---------- */
 export async function fetchAllData() {
-  const [classes, teachers, mentors, students, mentorAssignments, surahs, attendance, scores, profiles, certifications, schoolSettings] =
+  const [classes, teachers, mentors, students, mentorAssignments, surahs, attendance, scores, profiles, certifications, riwayatPendidikan, schoolSettings] =
     await Promise.all([
       supabase.from("classes").select("*"),
       supabase.from("teachers").select("*"),
@@ -22,6 +22,7 @@ export async function fetchAllData() {
       supabase.from("scores").select("*"),
       supabase.from("profiles").select("*"),
       supabase.from("certifications").select("*"),
+      supabase.from("riwayat_pendidikan").select("*"),
       supabase.from("school_settings").select("*").eq("id", true).single(),
     ]);
 
@@ -30,6 +31,9 @@ export async function fetchAllData() {
     teachers: mustOk(teachers, "teachers").map((t) => ({
       id: t.id, nama: t.nama, fotoUrl: t.foto_url, noHp: t.no_hp,
       pendidikanTerakhir: t.pendidikan_terakhir, alamat: t.alamat,
+      namaPanggilan: t.nama_panggilan, nik: t.nik, tempatLahir: t.tempat_lahir,
+      tanggalLahir: t.tanggal_lahir, agama: t.agama, statusPernikahan: t.status_pernikahan,
+      kota: t.kota, provinsi: t.provinsi,
     })),
     mentors: mustOk(mentors, "mentors").map((m) => ({ id: m.id, nama: m.nama })),
     students: mustOk(students, "students").map((s) => ({
@@ -51,6 +55,9 @@ export async function fetchAllData() {
     })),
     certifications: mustOk(certifications, "certifications").map((c) => ({
       id: c.id, teacherId: c.teacher_id, nama: c.nama_sertifikasi, penyelenggara: c.penyelenggara, tahun: c.tahun, fileUrl: c.file_url,
+    })),
+    riwayatPendidikan: mustOk(riwayatPendidikan, "riwayat_pendidikan").map((r) => ({
+      id: r.id, teacherId: r.teacher_id, jenjang: r.jenjang, institusi: r.institusi, jurusan: r.jurusan, tahunLulus: r.tahun_lulus,
     })),
     schoolSettings: { stempelUrl: schoolSettings.data?.stempel_url || null },
   };
@@ -149,8 +156,35 @@ export async function updateTeacherProfile(teacherId, fields) {
   if (fields.noHp !== undefined) payload.no_hp = fields.noHp;
   if (fields.pendidikanTerakhir !== undefined) payload.pendidikan_terakhir = fields.pendidikanTerakhir;
   if (fields.alamat !== undefined) payload.alamat = fields.alamat;
+  if (fields.namaPanggilan !== undefined) payload.nama_panggilan = fields.namaPanggilan;
+  if (fields.nik !== undefined) payload.nik = fields.nik;
+  if (fields.tempatLahir !== undefined) payload.tempat_lahir = fields.tempatLahir;
+  if (fields.tanggalLahir !== undefined) payload.tanggal_lahir = fields.tanggalLahir || null;
+  if (fields.agama !== undefined) payload.agama = fields.agama;
+  if (fields.statusPernikahan !== undefined) payload.status_pernikahan = fields.statusPernikahan;
+  if (fields.kota !== undefined) payload.kota = fields.kota;
+  if (fields.provinsi !== undefined) payload.provinsi = fields.provinsi;
   const res = await supabase.from("teachers").update(payload).eq("id", teacherId);
   mustOk(res, "updateTeacherProfile");
+}
+
+/* ---------- RIWAYAT PENDIDIKAN PENGAJAR ---------- */
+export async function fetchRiwayatPendidikan(teacherId) {
+  const res = await supabase.from("riwayat_pendidikan").select("*").eq("teacher_id", teacherId).order("tahun_lulus", { ascending: false });
+  return mustOk(res, "fetchRiwayatPendidikan").map((r) => ({
+    id: r.id, teacherId: r.teacher_id, jenjang: r.jenjang, institusi: r.institusi, jurusan: r.jurusan, tahunLulus: r.tahun_lulus,
+  }));
+}
+export async function addRiwayatPendidikan(teacherId, item) {
+  const res = await supabase.from("riwayat_pendidikan").insert({
+    teacher_id: teacherId, jenjang: item.jenjang || null, institusi: item.institusi,
+    jurusan: item.jurusan || null, tahun_lulus: item.tahunLulus || null,
+  });
+  mustOk(res, "addRiwayatPendidikan");
+}
+export async function deleteRiwayatPendidikan(id) {
+  const res = await supabase.from("riwayat_pendidikan").delete().eq("id", id);
+  mustOk(res, "deleteRiwayatPendidikan");
 }
 
 /* ---------- SERTIFIKASI PENGAJAR ---------- */
