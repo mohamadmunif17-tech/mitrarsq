@@ -42,13 +42,14 @@ export async function fetchAllData() {
     mentorAssignments: mustOk(mentorAssignments, "mentor_assignments").map((m) => ({
       id: m.id, mentorId: m.mentor_id, studentId: m.student_id,
     })),
-    surahs: mustOk(surahs, "surahs").map((s) => ({ id: s.id, nama: s.nama, ayat: s.jumlah_ayat })),
+    surahs: mustOk(surahs, "surahs").map((s) => ({ id: s.id, nama: s.nama, ayat: s.jumlah_ayat, juz: s.juz })),
     attendance: mustOk(attendance, "attendance").map((a) => ({
       id: a.id, studentId: a.student_id, tanggal: a.tanggal, status: a.status, note: a.note || "", inputBy: a.input_by,
     })),
     scores: mustOk(scores, "scores").map((s) => ({
       id: s.id, studentId: s.student_id, tanggal: s.tanggal, surahId: s.surah_id,
-      ayatMulai: s.ayat_mulai, ayatAkhir: s.ayat_akhir, nilai: s.nilai, penguji: s.penguji, inputBy: s.input_by,
+      ayatMulai: s.ayat_mulai, ayatAkhir: s.ayat_akhir, nilai: s.nilai, nilaiHuruf: s.nilai_huruf,
+      catatan: s.catatan || "", penguji: s.penguji, inputBy: s.input_by,
     })),
     profiles: mustOk(profiles, "profiles").map((p) => ({
       id: p.id, nama: p.nama, role: p.role, refId: p.ref_id, status: p.status, signatureUrl: p.signature_url,
@@ -73,10 +74,14 @@ export async function saveAttendanceBatch(records) {
 }
 
 /* ---------- PENILAIAN ---------- */
+export const GRADE_TO_NUMBER = { "A+": 95, "A": 88, "B+": 80, "B": 73, "C": 65 };
+
 export async function insertScore(entry) {
   const res = await supabase.from("scores").insert({
     student_id: entry.studentId, tanggal: entry.tanggal, surah_id: entry.surahId,
-    ayat_mulai: entry.ayatMulai, ayat_akhir: entry.ayatAkhir, nilai: entry.nilai,
+    ayat_mulai: entry.ayatMulai, ayat_akhir: entry.ayatAkhir,
+    nilai: GRADE_TO_NUMBER[entry.nilaiHuruf] ?? 0, nilai_huruf: entry.nilaiHuruf,
+    catatan: entry.catatan || null,
     penguji: entry.penguji, input_by: entry.inputBy,
   });
   mustOk(res, "insertScore");

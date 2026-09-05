@@ -1066,7 +1066,7 @@ function DashboardAdmin({ db }) {
                   <div style={{ fontWeight: 600 }}>{studentName(db, s.studentId)}</div>
                   <div style={{ color: "#8A8064", fontSize: 11.5 }}>{surahName(db, s.surahId)} · {fmtDate(s.tanggal)}</div>
                 </div>
-                <div className="font-mono" style={{ fontWeight: 700, color: "var(--teal)" }}>{s.nilai}</div>
+                <div className="font-mono" style={{ fontWeight: 700, color: "var(--teal)" }}>{s.nilaiHuruf || s.nilai}</div>
               </div>
             ))}
           </div>
@@ -1367,14 +1367,18 @@ function PenilaianTahfidz({ db, refresh, user }) {
     : teacherStudents(db, user.refId);
 
   const availableClasses = db.classes.filter((c) => scopeStudents.some((s) => s.kelasId === c.id));
-  const [kelasFilter, setKelasFilter] = useState("all");
+  const [kelasFilter, setKelasFilter] = useState(availableClasses[0]?.id || "all");
   const filteredStudents = kelasFilter === "all" ? scopeStudents : scopeStudents.filter((s) => s.kelasId === kelasFilter);
 
-  const [studentId, setStudentId] = useState(scopeStudents[0]?.id || "");
-  const [surahId, setSurahId] = useState(db.surahs[0].id);
+  const [studentId, setStudentId] = useState(filteredStudents[0]?.id || "");
+  const availableJuz = [...new Set(db.surahs.map((s) => s.juz).filter(Boolean))].sort((a, b) => a - b);
+  const [juzFilter, setJuzFilter] = useState(availableJuz[0] || 30);
+  const surahsInJuz = db.surahs.filter((s) => s.juz === juzFilter);
+  const [surahId, setSurahId] = useState(surahsInJuz[0]?.id || db.surahs[0]?.id || "");
   const [ayatMulai, setAyatMulai] = useState(1);
   const [ayatAkhir, setAyatAkhir] = useState(1);
-  const [nilai, setNilai] = useState(80);
+  const [nilaiHuruf, setNilaiHuruf] = useState("A");
+  const [catatan, setCatatan] = useState("");
   const [tanggal, setTanggal] = useState(isoDaysAgo(0));
   const [msg, setMsg] = useState("");
   const [saving, setSaving] = useState(false);
@@ -1384,22 +1388,31 @@ function PenilaianTahfidz({ db, refresh, user }) {
     const list = val === "all" ? scopeStudents : scopeStudents.filter((s) => s.kelasId === val);
     setStudentId(list[0]?.id || "");
   }
+  function handleJuzFilter(val) {
+    const juzNum = Number(val);
+    setJuzFilter(juzNum);
+    const list = db.surahs.filter((s) => s.juz === juzNum);
+    setSurahId(list[0]?.id || "");
+    setAyatMulai(1); setAyatAkhir(1);
+  }
 
   const surah = db.surahs.find((s) => s.id === surahId);
 
   async function submit() {
-    if (!studentId) return;
+    if (!studentId) { setMsg("Pilih siswa terlebih dahulu."); return; }
+    if (!surah) { setMsg("Pilih surat terlebih dahulu."); return; }
     if (ayatAkhir < ayatMulai) { setMsg("Ayat akhir tidak boleh lebih kecil dari ayat mulai."); return; }
     if (ayatAkhir > surah.ayat) { setMsg(`Surat ${surah.nama} hanya memiliki ${surah.ayat} ayat.`); return; }
     const entry = {
-      studentId, tanggal, surahId, ayatMulai: Number(ayatMulai), ayatAkhir: Number(ayatAkhir), nilai: Number(nilai),
-      penguji: user.nama, inputBy: user.id,
+      studentId, tanggal, surahId, ayatMulai: Number(ayatMulai), ayatAkhir: Number(ayatAkhir),
+      nilaiHuruf, catatan: catatan.trim(), penguji: user.nama, inputBy: user.id,
     };
     setSaving(true);
     try {
       await insertScore(entry);
       await refresh();
       setMsg("Penilaian tersimpan.");
+      setCatatan("");
       setTimeout(() => setMsg(""), 2500);
     } catch (e) {
       setMsg("Gagal menyimpan: " + e.message);
@@ -1408,18 +1421,24 @@ function PenilaianTahfidz({ db, refresh, user }) {
   }
 
   const history = studentScores(db, studentId).slice(0, 6);
+  const NILAI_OPTIONS = ["A+", "A", "B+", "B", "C"];
+  const nilaiColor = { "A+": "var(--teal)", "A": "var(--teal)", "B+": "#7A5E32", "B": "#7A5E32", "C": "var(--red)" };
 
   return (
     <div>
       <SectionTitle sub="Catat hasil simakan/setoran hafalan siswa">{isMentor ? "Input Penilaian" : "Penilaian Tahfidz"}</SectionTitle>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 16 }}>
+      <div className="grid-2" style={{ gap: 16 }}>
         <div className="t-card" style={{ padding: 20 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>1. Tanggal</label>
+              <input type="date" className="t-input" max={isoDaysAgo(0)} value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
+            </div>
+
             {availableClasses.length > 1 && (
               <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Sortir berdasarkan Kelas</label>
+                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>2. Kelas</label>
                 <select className="t-select" value={kelasFilter} onChange={(e) => handleKelasFilter(e.target.value)}>
-                  <option value="all">Semua Kelas ({scopeStudents.length} siswa)</option>
                   {availableClasses.map((c) => {
                     const count = scopeStudents.filter((s) => s.kelasId === c.id).length;
                     return <option key={c.id} value={c.id}>{c.nama} ({count} siswa)</option>;
@@ -1427,36 +1446,57 @@ function PenilaianTahfidz({ db, refresh, user }) {
                 </select>
               </div>
             )}
+
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Siswa</label>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>3. Nama Siswa</label>
               <select className="t-select" value={studentId} onChange={(e) => setStudentId(e.target.value)}>
                 {filteredStudents.map((s) => <option key={s.id} value={s.id}>{s.nama}</option>)}
               </select>
             </div>
+
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Tanggal</label>
-              <input type="date" className="t-input" max={isoDaysAgo(0)} value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
-            </div>
-            <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Surat</label>
-              <select className="t-select" value={surahId} onChange={(e) => { setSurahId(e.target.value); setAyatMulai(1); setAyatAkhir(1); }}>
-                {db.surahs.map((s) => <option key={s.id} value={s.id}>{s.nama} ({s.ayat} ayat)</option>)}
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>4. Juz</label>
+              <select className="t-select" value={juzFilter} onChange={(e) => handleJuzFilter(e.target.value)}>
+                {availableJuz.map((j) => <option key={j} value={j}>Juz {j}</option>)}
               </select>
             </div>
-            <div style={{ display: "flex", gap: 10 }}>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Ayat Mulai</label>
-                <input type="number" min={1} max={surah.ayat} className="t-input" value={ayatMulai} onChange={(e) => setAyatMulai(e.target.value)} />
-              </div>
-              <div style={{ flex: 1 }}>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Ayat Akhir</label>
-                <input type="number" min={1} max={surah.ayat} className="t-input" value={ayatAkhir} onChange={(e) => setAyatAkhir(e.target.value)} />
-              </div>
-            </div>
+
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Nilai: <span className="font-mono" style={{ color: "var(--teal)", fontWeight: 700 }}>{nilai}</span></label>
-              <input type="range" min={0} max={100} value={nilai} onChange={(e) => setNilai(e.target.value)} style={{ width: "100%" }} />
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>5. Nama Surat</label>
+              <select className="t-select" value={surahId} onChange={(e) => { setSurahId(e.target.value); setAyatMulai(1); setAyatAkhir(1); }}>
+                {surahsInJuz.map((s) => <option key={s.id} value={s.id}>{s.nama} ({s.ayat} ayat)</option>)}
+              </select>
             </div>
+
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>6. Ayat Mulai &ndash; Ayat Akhir</label>
+              <div style={{ display: "flex", gap: 10 }}>
+                <input type="number" min={1} max={surah?.ayat || 1} className="t-input" value={ayatMulai} onChange={(e) => setAyatMulai(e.target.value)} placeholder="Awal" />
+                <input type="number" min={1} max={surah?.ayat || 1} className="t-input" value={ayatAkhir} onChange={(e) => setAyatAkhir(e.target.value)} placeholder="Akhir" />
+              </div>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>7. Nilai</label>
+              <div style={{ display: "flex", gap: 6 }}>
+                {NILAI_OPTIONS.map((g) => (
+                  <button
+                    key={g} type="button" onClick={() => setNilaiHuruf(g)}
+                    className="t-btn" style={{
+                      flex: 1, justifyContent: "center", fontWeight: 700,
+                      background: nilaiHuruf === g ? nilaiColor[g] : "var(--panel-soft)",
+                      color: nilaiHuruf === g ? "white" : "var(--ink)",
+                    }}
+                  >{g}</button>
+                ))}
+              </div>
+            </div>
+
+            <div>
+              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>8. Catatan (bila diperlukan)</label>
+              <textarea className="t-input" style={{ minHeight: 60, resize: "vertical", fontFamily: "inherit" }} value={catatan} onChange={(e) => setCatatan(e.target.value)} placeholder="Opsional" />
+            </div>
+
             {msg && <div style={{ fontSize: 12.5, color: msg.includes("tersimpan") ? "var(--teal)" : "var(--red)", fontWeight: 600 }}>{msg}</div>}
             <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={submit} disabled={saving}>
               {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} {saving ? "Menyimpan..." : "Simpan Penilaian"}
@@ -1468,12 +1508,13 @@ function PenilaianTahfidz({ db, refresh, user }) {
           {history.length ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {history.map((h) => (
-                <div key={h.id} style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 8, fontSize: 13 }}>
+                <div key={h.id} style={{ display: "flex", justifyContent: "space-between", borderBottom: "1px solid var(--line)", paddingBottom: 8, fontSize: 13, gap: 8 }}>
                   <div>
                     <div style={{ fontWeight: 600 }}>{surahName(db, h.surahId)} ({h.ayatMulai}-{h.ayatAkhir})</div>
                     <div style={{ fontSize: 11.5, color: "#8A8064" }}>{fmtDate(h.tanggal)} · {h.penguji}</div>
+                    {h.catatan && <div style={{ fontSize: 11.5, color: "#8A8064", fontStyle: "italic", marginTop: 2 }}>&ldquo;{h.catatan}&rdquo;</div>}
                   </div>
-                  <div className="font-mono" style={{ fontWeight: 700, color: "var(--teal)" }}>{h.nilai}</div>
+                  <div className="font-mono" style={{ fontWeight: 700, color: nilaiColor[h.nilaiHuruf] || "var(--teal)", flexShrink: 0 }}>{h.nilaiHuruf || h.nilai}</div>
                 </div>
               ))}
             </div>
@@ -1483,6 +1524,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
     </div>
   );
 }
+
 
 /* ============================== REKAP ============================== */
 function RekapView({ db, user }) {
@@ -1532,7 +1574,7 @@ function RekapView({ db, user }) {
                 <td>{fmtDate(r.tanggal)}</td>
                 <td>{surahName(db, r.surahId)}</td>
                 <td>{r.ayatMulai}-{r.ayatAkhir}</td>
-                <td className="font-mono" style={{ fontWeight: 700 }}>{r.nilai}</td>
+                <td className="font-mono" style={{ fontWeight: 700 }}>{r.nilaiHuruf || r.nilai}</td>
                 <td>{r.penguji}</td>
               </tr>
             )) : (
@@ -1675,7 +1717,7 @@ function ReportSheet({ db, student, mk }) {
                 <td>{fmtDate(s.tanggal)}</td>
                 <td>{surahName(db, s.surahId)}</td>
                 <td>{s.ayatMulai}-{s.ayatAkhir}</td>
-                <td className="font-mono" style={{ fontWeight: 700 }}>{s.nilai}</td>
+                <td className="font-mono" style={{ fontWeight: 700 }}>{s.nilaiHuruf || s.nilai}</td>
                 <td>{s.penguji}</td>
               </tr>
             )) : <tr><td colSpan={5}><Empty text="Tidak ada setoran pada periode ini." /></td></tr>}
