@@ -42,9 +42,10 @@ async function fetchRows(table, options = {}) {
     profiles: "id,nama,role,ref_id,status,signature_url",
     certifications: "id,teacher_id,nama_sertifikasi,penyelenggara,tahun,file_url",
     riwayat_pendidikan: "id,teacher_id,jenjang,institusi,jurusan,tahun_lulus",
+    teacher_journals: "id,teacher_id,class_id,tanggal,materi,kegiatan,hasil,catatan,input_by,created_at",
   };
   const data = [];
-  const activityTable = table === "attendance" || table === "scores";
+  const activityTable = table === "attendance" || table === "scores" || table === "teacher_journals";
   const fromDate = activityTable ? (options.fromDate || null) : null;
   const toDate = activityTable ? (options.toDate || null) : null;
   for (let offset = 0; ; offset += 500) {
@@ -64,6 +65,7 @@ async function fetchRows(table, options = {}) {
     if ((result.data || []).length < 500) return {data,error:null};
   }
 }
+
 
 /* ---------- FETCH SEMUA DATA (dipanggil ulang setelah tiap mutasi) ---------- */
 export async function fetchAllData({ includeActivity = true, activityFromDate = defaultActivityFromDate() } = {}) {
@@ -129,6 +131,7 @@ export async function fetchActivityData({ fromDate = defaultActivityFromDate(), 
     fetchRows("scores", { fromDate, toDate }),
   ]);
   return {
+    fromDate, toDate,
     attendance: mustOk(attendance, "attendance").map((a) => ({
       id: a.id, studentId: a.student_id, tanggal: a.tanggal, status: a.status, note: a.note || "", inputBy: a.input_by,
     })),
@@ -138,6 +141,43 @@ export async function fetchActivityData({ fromDate = defaultActivityFromDate(), 
       catatan: s.catatan || "", penguji: s.penguji, inputBy: s.input_by,
     })),
   };
+}
+
+function mapJournalRow(j) {
+  return {
+    id: j.id, teacherId: j.teacher_id, classId: j.class_id, tanggal: j.tanggal,
+    materi: j.materi || "", kegiatan: j.kegiatan || "", hasil: j.hasil || "", catatan: j.catatan || "",
+    inputBy: j.input_by, createdAt: j.created_at,
+  };
+}
+
+export async function insertTeacherJournal(entry) {
+  if (!entry?.classId || !entry?.tanggal || !String(entry.materi || "").trim() || !String(entry.kegiatan || "").trim()) {
+    throw new Error("Kelas, tanggal, materi, dan kegiatan jurnal wajib diisi.");
+  }
+  if (!validDate(entry.tanggal) || !entry.teacherId) throw new Error("Tanggal atau pengajar jurnal tidak valid.");
+  if (String(entry.materi).trim().length > 500 || String(entry.kegiatan).trim().length > 2000 || String(entry.hasil || "").trim().length > 1000 || String(entry.catatan || "").trim().length > 1000) {
+    throw new Error("Panjang jurnal melebihi batas yang diizinkan.");
+  }
+  const userId = await requireInputUser([entry.inputBy]);
+  const result = await withDbTimeout(supabase.from("teacher_journals").insert({
+    teacher_id: entry.teacherId, class_id: entry.classId, tanggal: entry.tanggal,
+    materi: String(entry.materi).trim(), kegiatan: String(entry.kegiatan).trim(),
+    hasil: String(entry.hasil || "").trim(), catatan: String(entry.catatan || "").trim(), input_by: userId,
+  }).select("id,teacher_id,class_id,tanggal,materi,kegiatan,hasil,catatan,input_by,created_at").single(), "Menyimpan jurnal; jika hasil belum pasti, muat ulang daftar jurnal sebelum mencoba kembali");
+  if (["42P01", "PGRST205"].includes(result.error?.code)) throw new Error("Jurnal belum terpasang. Jalankan SQL 09_jurnal_mengajar.sql di Supabase SQL Editor.");
+  return mapJournalRow(mustOk(result, "Simpan jurnal mengajar"));
+}
+
+// Dimuat ketika menu jurnal dibuka, tanpa menambah request saat login.
+export async function fetchTeacherJournals(month) {
+  if (!/^\d{4}-(0[1-9]|1[0-2])$/.test(month || "")) throw new Error("Pilih bulan jurnal yang valid.");
+  const fromDate = `${month}-01`;
+  const [year, monthNumber] = month.split("-").map(Number);
+  const toDate = new Date(Date.UTC(year, monthNumber, 0)).toISOString().slice(0, 10);
+  const result = await fetchRows("teacher_journals", { fromDate, toDate });
+  if (["42P01", "PGRST205"].includes(result.error?.code)) throw new Error("Jurnal belum terpasang. Jalankan SQL 09_jurnal_mengajar.sql di Supabase SQL Editor.");
+  return (mustOk(result, "Memuat jurnal mengajar") || []).map(mapJournalRow);
 }
 
 // Identitas pencatat mengikuti sesi Supabase, bukan nilai dari formulir.
@@ -506,7 +546,7 @@ export async function deleteScore(id) {
 }
 
 export async function fetchReportMonthSettings(month) {
-  const result = await supabase.from("report_month_settings").select("report_date").eq("month", month).maybeSingle();
+  const result = await withDbTimeout(supabase.from("report_month_settings").select("report_date").eq("month", month).maybeSingle(), "Memuat tanggal pengesahan");
   return mustOk(result, "Tanggal laporan");
 }
 
@@ -517,9 +557,9 @@ export async function saveReportMonthSettings(month, date) {
   const parsed = new Date(`${date}T12:00:00Z`);
   if (Number.isNaN(parsed.getTime()) || parsed.toISOString().slice(0, 10) !== date) throw new Error("Tanggal tidak valid.");
   const userId = await requireInputUser([]);
-  const result = await supabase.from("report_month_settings").upsert({
+  const result = await withDbTimeout(supabase.from("report_month_settings").upsert({
     month, report_date: date, updated_by: userId, updated_at: new Date().toISOString(),
-  }, {onConflict: "month"}).select("report_date").single();
+  }, {onConflict: "month"}).select("report_date").single(), "Menyimpan tanggal pengesahan");
   return mustOk(result, "Simpan tanggal laporan");
 }
 

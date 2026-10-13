@@ -12,6 +12,8 @@ import "./theme.css";
 import "./dashboardPolish.css";
 import { AdminUserActions, DeleteScoreButton } from "./ExtraFeatures.jsx";
 import { PIC_TAHFIDZ, defaultReportDate, longDateID } from "./reportTools.js";
+import { buildStudentRecap } from "./studentRecapModel.js";
+import { replaceActivityRange } from "./activityDataModel.js";
 import { fetchReportMonthSettings, saveReportMonthSettings } from "./db.js";
 import { useState, useEffect, useRef } from "react";
 import {
@@ -28,6 +30,7 @@ import {
 import { supabase } from "./supabaseClient.js";
 import {
   fetchAllData, fetchActivityData, fetchStudentScores, fetchScoresForStudents, fetchAttendanceForDate, saveAttendanceBatch, insertScore, bulkInsertScores, insertStudent, bulkInsertStudents, bulkUpsertStudents,
+  insertTeacherJournal, fetchTeacherJournals,
   deleteStudent, insertClass, deleteClass, findOrCreateClassByName, updateClassTeacher,
   setProfileStatus, changeOwnPassword, sendPasswordResetEmail, createUserAccount,
   updateStudentClass, bulkUpdateStudentClass, bulkDeleteStudents,
@@ -234,8 +237,10 @@ const GlobalStyle = () => (
 /* ============================== SEED DATA ============================== */
 function isoDaysAgo(n) {
   const d = new Date();
-  d.setDate(d.getDate() - n);
-  return d.toISOString().slice(0, 10);
+  d.setUTCDate(d.getUTCDate() - n);
+  const parts = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Jakarta", year: "numeric", month: "2-digit", day: "2-digit" }).formatToParts(d);
+  const value = (type) => parts.find((part) => part.type === type).value;
+  return `${value("year")}-${value("month")}-${value("day")}`;
 }
 
 /* ============================== HELPERS ============================== */
@@ -256,7 +261,7 @@ function monthKey(iso) {
   return iso.slice(0, 7);
 }
 function currentMonthKey() {
-  return new Date().toISOString().slice(0, 7);
+  return isoDaysAgo(0).slice(0, 7);
 }
 function prevMonthKey(mk) {
   const [y, m] = mk.split("-").map(Number);
@@ -572,6 +577,7 @@ const NAV_BY_ROLE = {
     { id: "userman", label: "Manajemen User", icon: UserCog },
     { id: "monitoring", label: "Monitoring", icon: BarChart3 },
     { id: "rekap", label: "Rekap Kelas", icon: FileText },
+    { id: "jurnal-admin", label: "Jurnal Mengajar", icon: BookMarked },
     { id: "report", label: "Report Bulanan", icon: FileText },
     { id: "profil", label: "Profil Saya", icon: Stamp },
     { id: "password", label: "Ganti Password", icon: KeyRound },
@@ -581,6 +587,7 @@ const NAV_BY_ROLE = {
     { id: "presensi", label: "Presensi Harian", icon: ClipboardCheck },
     { id: "penilaian", label: "Penilaian Tahfidz", icon: BookOpen },
     { id: "rekap", label: "Rekap Kelas", icon: FileText },
+    { id: "jurnal", label: "Jurnal Mengajar", icon: BookMarked },
     { id: "report", label: "Report Bulanan", icon: FileText },
     { id: "profil", label: "Profil Saya", icon: Award },
     { id: "password", label: "Ganti Password", icon: KeyRound },
@@ -1738,9 +1745,163 @@ function PenilaianTahfidz({ db, refresh, user }) {
 
 
 /* ============================== REKAP ============================== */
+function JurnalMengajarPengajar({ db, user }) {
+  const classes = teacherClasses(db, user.refId).sort((a, b) => a.nama.localeCompare(b.nama, "id", { numeric: true }));
+  const [form, setForm] = useState({ classId: classes[0]?.id || "", tanggal: isoDaysAgo(0), materi: "", kegiatan: "", hasil: "", catatan: "" });
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState("");
+  const [period, setPeriod] = useState(currentMonthKey());
+  const [journals, setJournals] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [reloadVersion, setReloadVersion] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setLoadError("");
+    fetchTeacherJournals(period).then((rows) => { if (!cancelled) setJournals(rows.filter((j) => j.teacherId === user.refId)); })
+      .catch((e) => { if (!cancelled) { setJournals([]); setLoadError(e.message); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [period, reloadVersion, user.refId]);
+
+  async function submit(e) {
+    e.preventDefault();
+    setBusy(true); setMessage(""); setError("");
+    try {
+      await insertTeacherJournal({ ...form, teacherId: user.refId, inputBy: user.id });
+      setPeriod(form.tanggal.slice(0, 7));
+      setReloadVersion((v) => v + 1);
+      setForm((prev) => ({ ...prev, materi: "", kegiatan: "", hasil: "", catatan: "" }));
+      setMessage("Jurnal mengajar berhasil disimpan.");
+    } catch (e2) { setError(e2.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div>
+      <SectionTitle sub="Catat kegiatan mengajar setiap pertemuan untuk direkap oleh admin.">Jurnal Mengajar</SectionTitle>
+      <form className="t-card" style={{ padding: 18, marginBottom: 18, display: "grid", gap: 12, maxWidth: 760 }} onSubmit={submit}>
+        <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, display: "grid", gap: 12 }}>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
+          <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Tanggal
+            <input className="t-input" type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} required />
+          </label>
+          <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Kelas
+            <select className="t-select" value={form.classId} onChange={(e) => setForm({ ...form, classId: e.target.value })} required>
+              <option value="">Pilih kelas</option>{classes.map((c) => <option key={c.id} value={c.id}>{c.nama}</option>)}
+            </select>
+          </label>
+        </div>
+        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Materi
+          <input className="t-input" maxLength={500} value={form.materi} onChange={(e) => setForm({ ...form, materi: e.target.value })} placeholder="Contoh: Surat Al-Bayyinah ayat 1–8" required />
+        </label>
+        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Kegiatan pembelajaran
+          <textarea className="t-input" rows={3} maxLength={2000} value={form.kegiatan} onChange={(e) => setForm({ ...form, kegiatan: e.target.value })} placeholder="Tuliskan kegiatan yang dilakukan pada pertemuan ini." required />
+        </label>
+        <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
+          <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Hasil/evaluasi
+            <textarea className="t-input" rows={2} maxLength={1000} value={form.hasil} onChange={(e) => setForm({ ...form, hasil: e.target.value })} />
+          </label>
+          <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Catatan/tindak lanjut
+            <textarea className="t-input" rows={2} maxLength={1000} value={form.catatan} onChange={(e) => setForm({ ...form, catatan: e.target.value })} />
+          </label>
+        </div>
+        </fieldset>
+        {error && <div role="alert" style={{ color: "var(--red)", fontSize: 12, fontWeight: 600 }}>{error}</div>}
+        {message && <div role="status" style={{ color: "var(--teal)", fontSize: 12, fontWeight: 600 }}>{message}</div>}
+        <button className="t-btn t-btn-primary" type="submit" disabled={busy || !classes.length}>{busy ? "Menyimpan..." : "Simpan Jurnal"}</button>
+        {!classes.length && <div style={{ color: "var(--red)", fontSize: 12 }}>Belum ada kelas yang ditugaskan kepada Anda.</div>}
+      </form>
+      <div style={{ display: "flex", gap: 10, alignItems: "end", marginBottom: 12 }}>
+        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Bulan jurnal<input className="t-input" type="month" value={period} onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }} /></label>
+        <button className="t-btn t-btn-ghost" disabled={loading} onClick={() => setReloadVersion((v) => v + 1)}>Muat ulang</button>
+      </div>
+      {loadError && <p role="alert" style={{ color: "var(--red)", fontSize: 12 }}>{loadError}</p>}
+      {loading && <p role="status" style={{ fontSize: 12 }}>Memuat jurnal...</p>}
+      <div className="t-card" style={{ padding: 8, overflowX: "auto" }}>
+        <div style={{ padding: "8px 10px", fontWeight: 700, fontSize: 13 }}>Jurnal {monthLabel(period)}</div>
+        <table className="t-table"><thead><tr><th>Tanggal</th><th>Kelas</th><th>Materi</th><th>Kegiatan</th><th>Hasil</th></tr></thead>
+          <tbody>{!loading && journals.map((j) => <tr key={j.id}><td>{fmtDate(j.tanggal)}</td><td>{className(db, j.classId)}</td><td>{j.materi}</td><td>{j.kegiatan}</td><td>{j.hasil || "-"}</td></tr>)}
+            {!loading && !loadError && !journals.length && <tr><td colSpan={5}><Empty text="Belum ada jurnal mengajar." /></td></tr>}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+function JurnalMengajarAdmin({ db }) {
+  const [period, setPeriod] = useState(currentMonthKey());
+  const [classFilter, setClassFilter] = useState("all");
+  const [teacherFilter, setTeacherFilter] = useState("all");
+  const [busy, setBusy] = useState(false);
+  const [message, setMessage] = useState("");
+  const [journals, setJournals] = useState([]);
+  const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState("");
+  const [reloadVersion, setReloadVersion] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setLoading(true); setLoadError("");
+    fetchTeacherJournals(period).then((rows) => { if (!cancelled) setJournals(rows); })
+      .catch((e) => { if (!cancelled) { setJournals([]); setLoadError(e.message); } })
+      .finally(() => { if (!cancelled) setLoading(false); });
+    return () => { cancelled = true; };
+  }, [period, reloadVersion]);
+  const filtered = journals.filter((j) => (!period || monthKey(j.tanggal) === period) && (classFilter === "all" || j.classId === classFilter) && (teacherFilter === "all" || j.teacherId === teacherFilter)).sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
+
+  async function download(format) {
+    setBusy(true); setMessage("");
+    try {
+      const rows = filtered.map((j, index) => ({
+        No: index + 1, Tanggal: j.tanggal, Kelas: className(db, j.classId), Pengajar: db.teachers.find((t) => t.id === j.teacherId)?.nama || "-",
+        Materi: j.materi, "Kegiatan pembelajaran": j.kegiatan, "Hasil/evaluasi": j.hasil || "", "Catatan/tindak lanjut": j.catatan || "",
+      }));
+      const options = { periodLabel: monthLabel(period), classLabel: classFilter === "all" ? "Semua kelas" : className(db, classFilter), teacherLabel: teacherFilter === "all" ? "Semua pengajar" : db.teachers.find((t) => t.id === teacherFilter)?.nama || "-" };
+      if (format === "pdf") {
+        const { downloadJournalPdf } = await import("./pdfExports.js");
+        await downloadJournalPdf(rows, options);
+      } else {
+        const XLSX = await loadXlsx();
+        const sheet = XLSX.utils.aoa_to_sheet([["SAQUIN — Sahabat Quran Indonesia"], ["JURNAL MENGAJAR"], ["Bulan", options.periodLabel], ["Kelas", options.classLabel], ["Pengajar", options.teacherLabel], []]);
+        XLSX.utils.sheet_add_json(sheet, rows, { origin: "A7" });
+        sheet["!cols"] = [{ wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 28 }, { wch: 32 }, { wch: 52 }, { wch: 36 }, { wch: 36 }];
+        const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, "Jurnal Mengajar");
+        XLSX.writeFile(book, `Jurnal_Mengajar_${period}_${safeExportName(options.classLabel)}.xlsx`);
+      }
+      setMessage(`${rows.length} jurnal berhasil diunduh.`);
+    } catch (e) { setMessage("Gagal mengunduh jurnal: " + e.message); }
+    finally { setBusy(false); }
+  }
+
+  return (
+    <div>
+      <SectionTitle sub="Kumpulan jurnal dari seluruh pengajar yang dapat difilter dan diunduh.">Jurnal Mengajar</SectionTitle>
+      <div className="t-card-soft" style={{ padding: 14, marginBottom: 16, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
+        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Bulan<input className="t-input" type="month" value={period} onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }} /></label>
+        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Kelas<select className="t-select" value={classFilter} onChange={(e) => setClassFilter(e.target.value)}><option value="all">Semua kelas</option>{db.classes.map((c) => <option key={c.id} value={c.id}>{c.nama}</option>)}</select></label>
+        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Pengajar<select className="t-select" value={teacherFilter} onChange={(e) => setTeacherFilter(e.target.value)}><option value="all">Semua pengajar</option>{db.teachers.map((t) => <option key={t.id} value={t.id}>{t.nama}</option>)}</select></label>
+        <button className="t-btn t-btn-ghost" disabled={loading} onClick={() => setReloadVersion((v) => v + 1)}>Muat ulang</button>
+        <button className="t-btn t-btn-primary" onClick={() => download("xlsx")} disabled={busy || loading || !!loadError || !filtered.length}><Download size={14} /> {busy ? "Menyiapkan..." : "Unduh Excel"}</button>
+        <button className="t-btn t-btn-ghost" onClick={() => download("pdf")} disabled={busy || loading || !!loadError || !filtered.length}><Download size={14} /> Unduh PDF</button>
+      </div>
+      {loading && <p role="status" style={{ fontSize: 12 }}>Memuat jurnal...</p>}
+      {loadError && <p role="alert" style={{ color: "var(--red)", fontSize: 12 }}>{loadError}</p>}
+      {message && <p role="status" style={{ fontSize: 12, color: message.startsWith("Gagal") ? "var(--red)" : "var(--teal)" }}>{message}</p>}
+      <div className="t-card" style={{ padding: 8, overflowX: "auto" }}>
+        <table className="t-table"><thead><tr><th>Tanggal</th><th>Kelas</th><th>Pengajar</th><th>Materi</th><th>Kegiatan</th><th>Hasil</th><th>Catatan</th></tr></thead>
+          <tbody>{!loading && filtered.map((j) => <tr key={j.id}><td>{fmtDate(j.tanggal)}</td><td>{className(db, j.classId)}</td><td>{db.teachers.find((t) => t.id === j.teacherId)?.nama || "-"}</td><td>{j.materi}</td><td>{j.kegiatan}</td><td>{j.hasil || "-"}</td><td>{j.catatan || "-"}</td></tr>)}
+            {!loading && !loadError && !filtered.length && <tr><td colSpan={7}><Empty text="Belum ada jurnal pada filter ini." /></td></tr>}</tbody>
+        </table>
+      </div>
+    </div>
+  );
+}
+
+
+/* ============================== REKAP ============================== */
 function RekapView({ db, user, refresh }) {
   let students = [];
-  let title = "Rekap Tahfidz";
   let sub = "";
   if (user.role === "admin") { students = db.students; sub = "Seluruh siswa"; }
   if (user.role === "pengajar") {
@@ -1768,24 +1929,72 @@ function RekapView({ db, user, refresh }) {
   const [period, setPeriod] = useState(currentMonthKey());
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
-  const requestedPeriodRef = useRef("");
+  const [historyLoading, setHistoryLoading] = useState(true);
+  const [historyError, setHistoryError] = useState("");
+  // Tanggal pengesahan disimpan per bulan supaya rekap Excel dan PDF
+  // menggunakan tanggal resmi yang sama dengan Report Bulanan.
+  const [approvalDate, setApprovalDate] = useState(defaultReportDate(period));
+  const [approvalDateLoading, setApprovalDateLoading] = useState(true);
+  const [approvalDateSaving, setApprovalDateSaving] = useState(false);
+  const [approvalDateDirty, setApprovalDateDirty] = useState(false);
+  const [approvalDateMsg, setApprovalDateMsg] = useState("");
+  const [approvalDateError, setApprovalDateError] = useState("");
+  const [historyReloadVersion, setHistoryReloadVersion] = useState(0);
   useEffect(() => {
-    if (!period || requestedPeriodRef.current === period) return;
-    const cutoff = new Date();
-    cutoff.setMonth(cutoff.getMonth() - 11);
-    const cutoffKey = cutoff.toISOString().slice(0, 7);
-    if (period >= cutoffKey) return;
-    requestedPeriodRef.current = period;
-    refresh({ activityMonth: period }).catch((error) => setExportError(`Riwayat ${monthLabel(period)} belum dapat dimuat: ${error.message}`));
+    let cancelled = false;
+    setApprovalDateLoading(true);
+    setApprovalDateDirty(false);
+    setApprovalDateMsg("");
+    setApprovalDateError("");
+    fetchReportMonthSettings(period || currentMonthKey()).then((data) => {
+      if (!cancelled) setApprovalDate(data?.report_date || defaultReportDate(period || currentMonthKey()));
+    }).catch((error) => {
+      if (!cancelled) {
+        setApprovalDate("");
+        setApprovalDateError(`Tanggal pengesahan belum dapat dimuat: ${error.message}`);
+      }
+    }).finally(() => { if (!cancelled) setApprovalDateLoading(false); });
+    return () => { cancelled = true; };
   }, [period]);
-  const rows = (validStudent === "all" ? filteredStudents : filteredStudents.filter((s) => s.id === validStudent))
-    .flatMap((s) => studentScores(db, s.id).map((sc) => ({ ...sc, _nama: s.nama })))
-    .filter((r) => !period || monthKey(r.tanggal) === period)
+  async function saveApprovalDate() {
+    if (!period || !approvalDate) return;
+    setApprovalDateSaving(true); setApprovalDateMsg(""); setApprovalDateError("");
+    try {
+      await saveReportMonthSettings(period, approvalDate);
+      setApprovalDateDirty(false);
+      setApprovalDateMsg("Tanggal pengesahan tersimpan untuk rekap bulan ini.");
+    } catch (error) { setApprovalDateError(error.message); }
+    finally { setApprovalDateSaving(false); }
+  }
+  useEffect(() => {
+    if (!period) return;
+    let cancelled = false;
+    setHistoryLoading(true); setHistoryError("");
+    refresh({ activityMonth: period }).catch((error) => {
+      if (!cancelled) {
+        setHistoryError(`Riwayat ${monthLabel(period)} belum dapat dimuat: ${error.message}`);
+      }
+    }).finally(() => { if (!cancelled) setHistoryLoading(false); });
+    return () => { cancelled = true; };
+  }, [period, historyReloadVersion]);
+  const recapStudents = (validStudent === "all" ? filteredStudents : filteredStudents.filter((s) => s.id === validStudent));
+  const recapStudentsById = new Map(recapStudents.map((student) => [student.id, student]));
+  const rows = db.scores
+    .filter((score) => recapStudentsById.has(score.studentId) && (!period || monthKey(score.tanggal) === period))
+    .map((score) => ({ ...score, _nama: recapStudentsById.get(score.studentId).nama }))
     .sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
-  const attendanceRows = (validStudent === "all" ? filteredStudents : filteredStudents.filter((s) => s.id === validStudent))
-    .flatMap((s) => studentAttendance(db, s.id).map((att) => ({ ...att, _nama: s.nama, _kelas: className(db, s.kelasId) })))
-    .filter((r) => !period || monthKey(r.tanggal) === period)
+  const attendanceRows = db.attendance
+    .filter((record) => recapStudentsById.has(record.studentId) && (!period || monthKey(record.tanggal) === period))
+    .map((record) => ({ ...record, _nama: recapStudentsById.get(record.studentId).nama, _kelas: className(db, recapStudentsById.get(record.studentId).kelasId) }))
     .sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
+
+  const studentRecaps = buildStudentRecap({ students: recapStudents, scores: db.scores, attendance: db.attendance, classes: db.classes, surahs: db.surahs, period });
+  const recapRows = studentRecaps.map((item, index) => ({
+    No: index + 1, Siswa: item.nama, NIS: item.nis, Kelas: item.kelas,
+    Hadir: item.counts.HADIR, Sakit: item.counts.SAKIT, Izin: item.counts.IZIN, Alpha: item.counts.ALPHA,
+    "Total presensi": item.attendanceCount, "Jumlah setoran": item.setoranCount, "Total ayat": item.totalAyat,
+    "Rata-rata nilai": item.averageScore ?? "-", "Rekap setoran": item.setoranSummary,
+  }));
 
   function exportRows() {
     return rows.map((r) => ({Siswa:r._nama, Kelas:className(db, db.students.find((s) => s.id === r.studentId)?.kelasId),
@@ -1801,6 +2010,17 @@ function RekapView({ db, user, refresh }) {
       const data = exportRows();
       if (format === "xlsx") {
         const XLSX = await loadXlsx();
+        const recapSheet = XLSX.utils.aoa_to_sheet([
+          ["SAQUIN — Sahabat Quran Indonesia"],
+          ["REKAP KEHADIRAN DAN SETORAN PER SISWA"],
+          ["Kelas", validClass === "all" ? "Semua kelas" : className(db, validClass)],
+          ["Bulan", period ? monthLabel(period) : "Semua periode"],
+          ["Tanggal pengesahan", approvalDate ? longDateID(approvalDate) : "-"],
+          [],
+        ]);
+        XLSX.utils.sheet_add_json(recapSheet, recapRows, { origin: "A7" });
+        XLSX.utils.sheet_add_aoa(recapSheet, [[""], ["Disahkan oleh PIC Tahfidz"], [approvalDate ? `Malang, ${longDateID(approvalDate)}` : ""], [""], [""], [PIC_TAHFIDZ]], {origin: recapRows.length + 8});
+        recapSheet["!cols"] = [{wch:6},{wch:32},{wch:16},{wch:16},{wch:9},{wch:9},{wch:9},{wch:9},{wch:16},{wch:16},{wch:14},{wch:18},{wch:90}];
         const sheet = XLSX.utils.json_to_sheet(data);
         sheet["!cols"] = [{wch:32},{wch:14},{wch:14},{wch:22},{wch:12},{wch:8},{wch:28},{wch:45}];
         const attendanceSheet = XLSX.utils.json_to_sheet(exportAttendanceRows());
@@ -1808,6 +2028,8 @@ function RekapView({ db, user, refresh }) {
         const summarySheet = XLSX.utils.json_to_sheet([
           { Keterangan: "Kelas", Nilai: validClass === "all" ? "Semua kelas" : className(db, validClass) },
           { Keterangan: "Periode", Nilai: period ? monthLabel(period) : "Semua periode" },
+          { Keterangan: "Tanggal pengesahan", Nilai: approvalDate ? longDateID(approvalDate) : "-" },
+          { Keterangan: "Format rekap", Nilai: "Satu baris per siswa: kehadiran dan setoran" },
           { Keterangan: "Jumlah penilaian", Nilai: data.length },
           { Keterangan: "Jumlah catatan kehadiran", Nilai: attendanceRows.length },
           { Keterangan: "Hadir", Nilai: attendanceRows.filter((r) => r.status === "HADIR").length },
@@ -1816,13 +2038,14 @@ function RekapView({ db, user, refresh }) {
           { Keterangan: "Alpha", Nilai: attendanceRows.filter((r) => r.status === "ALPHA").length },
         ]);
         const book = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(book, recapSheet, "Rekap Per Siswa");
         XLSX.utils.book_append_sheet(book, summarySheet, "Ringkasan");
         XLSX.utils.book_append_sheet(book, sheet, "Rekap Penilaian");
         XLSX.utils.book_append_sheet(book, attendanceSheet, "Rekap Kehadiran");
         XLSX.writeFile(book, `Rekap_Kelas_${safeExportName(validClass === "all" ? "semua_kelas" : className(db, validClass))}_${period || "semua_periode"}.xlsx`);
       } else {
-        const { downloadRecapPdf } = await import("./pdfExports.js");
-        await downloadRecapPdf(data, period ? monthLabel(period) : "Semua periode");
+        const { downloadStudentRecapPdf } = await import("./pdfExports.js");
+        await downloadStudentRecapPdf(studentRecaps, { periodLabel: period ? monthLabel(period) : "Semua periode", classLabel: validClass === "all" ? "Semua kelas" : className(db, validClass), approvalDate });
       }
     } catch (error) { setExportError(error.message); }
     finally { setExporting(false); }
@@ -1831,12 +2054,24 @@ function RekapView({ db, user, refresh }) {
     <div>
        <SectionTitle sub={sub}>Rekap Kelas Bulanan</SectionTitle>
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-         <label>Bulan rekap<input className="t-input" type="month" value={period} onChange={(e) => setPeriod(e.target.value)} /></label>
-        <button className="t-btn t-btn-ghost" onClick={() => setPeriod("")}>Semua periode</button>
-         <button className="t-btn t-btn-primary" disabled={exporting || (!rows.length && !attendanceRows.length)} onClick={() => exportRecap("xlsx")}><Download size={14} /> Unduh Excel (2 Rekap)</button>
-         <button className="t-btn t-btn-ghost" disabled={exporting || !rows.length} onClick={() => exportRecap("pdf")}><Download size={14} /> Unduh PDF Penilaian</button>
+         <label>Bulan rekap<input className="t-input" type="month" value={period} disabled={approvalDateSaving} onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }} /></label>
+         <button className="t-btn t-btn-primary" disabled={exporting || historyLoading || !!historyError || approvalDateLoading || approvalDateSaving || !!approvalDateError || approvalDateDirty || !approvalDate || !recapRows.length} onClick={() => exportRecap("xlsx")}><Download size={14} /> Unduh Excel Rekap Siswa</button>
+         <button className="t-btn t-btn-ghost" disabled={exporting || historyLoading || !!historyError || approvalDateLoading || approvalDateSaving || !!approvalDateError || approvalDateDirty || !approvalDate || !recapRows.length} onClick={() => exportRecap("pdf")}><Download size={14} /> Unduh PDF Rekap Siswa</button>
       </div>
       {exportError && <p role="alert" style={{color:"var(--red)"}}>{exportError}</p>}
+      {historyLoading && <p role="status" style={{fontSize:12}}>Memuat kehadiran dan setoran {monthLabel(period)}...</p>}
+      {historyError && <div role="alert" style={{color:"var(--red)",marginBottom:12}}>{historyError} <button className="t-btn t-btn-ghost" onClick={() => setHistoryReloadVersion((v) => v + 1)}>Muat ulang bulan ini</button></div>}
+      <div className="t-card-soft" style={{padding:14,marginBottom:16}}>
+        {user.role === "admin" ? <div style={{display:"flex",gap:10,alignItems:"end",flexWrap:"wrap"}}>
+          <label style={{display:"grid",gap:6,fontSize:12}}>Tanggal pengesahan — {period ? monthLabel(period) : "Semua periode"}
+            <input className="t-input" type="date" value={approvalDate} disabled={!period || approvalDateLoading || approvalDateSaving} onChange={(e) => {setApprovalDate(e.target.value);setApprovalDateDirty(true);setApprovalDateMsg("");}} />
+          </label>
+          <button className="t-btn t-btn-primary" disabled={!period || approvalDateLoading || approvalDateSaving || !approvalDate} onClick={saveApprovalDate}>{approvalDateSaving ? "Menyimpan..." : "Simpan tanggal pengesahan"}</button>
+        </div> : <span>Tanggal pengesahan: {approvalDateLoading ? "Memuat..." : approvalDate ? longDateID(approvalDate) : "-"}. Diatur oleh admin.</span>}
+        {approvalDateMsg && <p role="status" style={{margin:"8px 0 0",fontSize:12,color:approvalDateMsg.includes("gagal") || approvalDateMsg.includes("ditolak") ? "var(--red)" : "var(--teal)"}}>{approvalDateMsg}</p>}
+        {approvalDateError && <p role="alert" style={{margin:"8px 0 0",fontSize:12,color:"var(--red)"}}>{approvalDateError}</p>}
+        {approvalDateDirty && <p style={{margin:"8px 0 0",fontSize:12}}>Simpan tanggal pengesahan sebelum mengunduh rekap.</p>}
+      </div>
       <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
         <label style={{display:"grid",gap:6,fontSize:12}}>Kelas rekap
           <select className="t-select" style={{width:240,maxWidth:"100%"}} value={validClass} onChange={e => {setClassFilter(e.target.value);setFilter("all");setExportError("");}}>
@@ -1851,7 +2086,7 @@ function RekapView({ db, user, refresh }) {
           </select>
         </label>
       </div>
-       <p role="status" style={{fontSize:12,color:"#64786e"}}>{rows.length} penilaian dan {attendanceRows.length} catatan kehadiran sesuai pilihan kelas, siswa, dan periode. Excel berisi ringkasan, penilaian, dan kehadiran.</p>
+       <p role="status" style={{fontSize:12,color:"#64786e"}}>{recapRows.length} siswa sesuai pilihan kelas, siswa, dan periode. Excel utama berisi satu baris per siswa (kehadiran + setoran), disertai detail penilaian dan kehadiran.</p>
        <div className="t-card-soft" style={{padding:14,marginBottom:16}}>
          <strong>Ringkasan kehadiran {period ? `· ${monthLabel(period)}` : ""}</strong>
          <span style={{marginLeft:12}}>Hadir {attendanceRows.filter((r) => r.status === "HADIR").length}</span>
@@ -1859,6 +2094,16 @@ function RekapView({ db, user, refresh }) {
          <span style={{marginLeft:12}}>Izin {attendanceRows.filter((r) => r.status === "IZIN").length}</span>
          <span style={{marginLeft:12}}>Alpha {attendanceRows.filter((r) => r.status === "ALPHA").length}</span>
        </div>
+      <div className="t-card" style={{padding:8,overflowX:"auto",marginBottom:16}}>
+        <table className="t-table">
+          <thead><tr><th>No</th><th>Siswa</th><th>NIS</th><th>Kelas</th><th>Hadir</th><th>Sakit</th><th>Izin</th><th>Alpha</th><th>Setoran</th><th>Total ayat</th><th>Rata-rata nilai</th><th>Rekap setoran</th></tr></thead>
+          <tbody>{recapRows.length ? recapRows.map((row, index) => <tr key={studentRecaps[index].studentId}>
+            <td>{index + 1}</td><td style={{fontWeight:600}}>{row.Siswa}</td><td>{row.NIS}</td><td>{row.Kelas}</td><td>{row.Hadir}</td><td>{row.Sakit}</td><td>{row.Izin}</td><td>{row.Alpha}</td><td>{row["Jumlah setoran"]}</td><td>{row["Total ayat"]}</td><td>{row["Rata-rata nilai"]}</td><td style={{minWidth:260,whiteSpace:"normal",fontSize:12}}>{row["Rekap setoran"]}</td>
+          </tr>) : <tr><td colSpan={12}><Empty text="Belum ada siswa sesuai filter." /></td></tr>}</tbody>
+        </table>
+      </div>
+      <details>
+        <summary style={{cursor:"pointer",fontWeight:600,marginBottom:12}}>Lihat detail setoran untuk koreksi data</summary>
       <div className="t-card" style={{ padding: 8, overflowX:"auto" }}>
         <table className="t-table">
           <thead>
@@ -1883,6 +2128,7 @@ function RekapView({ db, user, refresh }) {
           </tbody>
         </table>
       </div>
+      </details>
     </div>
   );
 }
@@ -2729,13 +2975,22 @@ export default function TahfidzApp() {
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const sessionHandledRef = useRef("");
+  const activityRequestVersionRef = useRef(0);
+  const activityMonthRequestsRef = useRef(new Map());
+  const latestActivitySyncRef = useRef(0);
 
   async function syncActivity(cacheKey) {
+    const requestVersion = ++activityRequestVersionRef.current;
+    const sessionKey = sessionHandledRef.current;
+    latestActivitySyncRef.current = requestVersion;
     try {
       const activity = await fetchActivityData();
+      if (latestActivitySyncRef.current !== requestVersion || sessionHandledRef.current !== sessionKey) return activity;
       setDb((prev) => {
         if (!prev) return prev;
-        const next = { ...prev, ...activity };
+        const preserveMonths = [...activityMonthRequestsRef.current].filter(([, version]) => version > requestVersion).map(([month]) => month);
+        const range = { fromDate: activity.fromDate, toDate: activity.toDate, preserveMonths };
+        const next = { ...prev, attendance: replaceActivityRange(prev.attendance, activity.attendance, range), scores: replaceActivityRange(prev.scores, activity.scores, range) };
         if (cacheKey) {
           try { sessionStorage.setItem(`saqu-db-cache:${cacheKey}`, JSON.stringify({ savedAt: Date.now(), data: next })); } catch { /* cache is optional */ }
         }
@@ -2744,6 +2999,7 @@ export default function TahfidzApp() {
       setActivityWarning("");
       return activity;
     } catch (e) {
+      if (latestActivitySyncRef.current !== requestVersion || sessionHandledRef.current !== sessionKey) return;
       console.warn("Sinkronisasi presensi dan penilaian gagal:", e);
       setActivityWarning("Riwayat presensi dan penilaian belum termuat. Jalankan indeks Supabase pada panduan deploy, lalu coba lagi.");
       throw e;
@@ -2752,6 +3008,7 @@ export default function TahfidzApp() {
 
   async function refresh(options) {
     if (options?.attendanceFor) {
+      latestActivitySyncRef.current = 0;
       const {studentIds, date} = options.attendanceFor;
       const attendance = await fetchAttendanceForDate(studentIds, date);
       const ids = new Set(studentIds || []);
@@ -2759,35 +3016,38 @@ export default function TahfidzApp() {
       return;
     }
     if (options?.activityMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(options.activityMonth)) {
+      const requestVersion = ++activityRequestVersionRef.current;
+      const sessionKey = sessionHandledRef.current;
+      activityMonthRequestsRef.current.set(options.activityMonth, requestVersion);
       const fromDate = `${options.activityMonth}-01`;
       const nextMonth = new Date(`${fromDate}T12:00:00Z`);
       nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
       const toDate = new Date(nextMonth.getTime() - 86400000).toISOString().slice(0, 10);
       const activity = await fetchActivityData({ fromDate, toDate });
+      if (activityMonthRequestsRef.current.get(options.activityMonth) !== requestVersion || sessionHandledRef.current !== sessionKey) return activity;
       setDb((prev) => {
         if (!prev) return prev;
-        const merge = (oldRows, newRows) => {
-          const byId = new Map(oldRows.map((row) => [row.id, row]));
-          newRows.forEach((row) => byId.set(row.id, row));
-          return [...byId.values()];
-        };
-        return { ...prev, attendance: merge(prev.attendance, activity.attendance), scores: merge(prev.scores, activity.scores) };
+        const range = { fromDate, toDate };
+        return { ...prev, attendance: replaceActivityRange(prev.attendance, activity.attendance, range), scores: replaceActivityRange(prev.scores, activity.scores, range) };
       });
       setActivityWarning("");
       return activity;
     }
     if (options?.scoresForMany?.length) {
+      latestActivitySyncRef.current = 0;
       const studentIds = [...new Set(options.scoresForMany.filter(Boolean))];
       const scores = await fetchScoresForStudents(studentIds);
       setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => !studentIds.includes(s.studentId)), ...scores] } : prev);
       return;
     }
     if (options?.scoresFor) {
+      latestActivitySyncRef.current = 0;
       const scores = await fetchStudentScores(options.scoresFor);
       setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => s.studentId !== options.scoresFor), ...scores] } : prev);
       return;
     }
     try {
+      latestActivitySyncRef.current = 0;
       const data = await fetchAllData({ includeActivity: !options?.initial });
       setDb(data);
       if (options?.cacheKey) {
@@ -2950,6 +3210,10 @@ export default function TahfidzApp() {
     content = <PenilaianTahfidz db={activityDb} refresh={refresh} user={user} />;
   } else if (view === "rekap") {
     content = <RekapView db={activityDb} user={user} refresh={refresh} />;
+  } else if (view === "jurnal" && user.role === "pengajar") {
+    content = <JurnalMengajarPengajar db={db} user={user} />;
+  } else if (view === "jurnal-admin" && user.role === "admin") {
+    content = <JurnalMengajarAdmin db={db} />;
   } else if (view === "master") {
     content = <MasterData db={db} refresh={refresh} />;
   } else if (view === "userman") {
