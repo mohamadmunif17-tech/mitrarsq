@@ -23,7 +23,13 @@ function mustOk(result, label) {
   return result.data;
 }
 
-async function fetchRows(table) {
+function defaultActivityFromDate() {
+  const date = new Date();
+  date.setMonth(date.getMonth() - 12);
+  return date.toISOString().slice(0, 10);
+}
+
+async function fetchRows(table, options = {}) {
   const columns = {
     classes: "id,nama,teacher_id",
     teachers: "id,nama,foto_url,no_hp,pendidikan_terakhir,alamat,nama_panggilan,nik,tempat_lahir,tanggal_lahir,agama,status_pernikahan,kota,provinsi",
@@ -38,11 +44,21 @@ async function fetchRows(table) {
     riwayat_pendidikan: "id,teacher_id,jenjang,institusi,jurusan,tahun_lulus",
   };
   const data = [];
+  const activityTable = table === "attendance" || table === "scores";
+  const fromDate = activityTable ? (options.fromDate || null) : null;
+  const toDate = activityTable ? (options.toDate || null) : null;
   for (let offset = 0; ; offset += 500) {
-    const result = await withDbTimeout(
-      supabase.from(table).select(columns[table] || "*").order("id").range(offset, offset + 499),
-      `Memuat ${table}`,
-    );
+    let query = supabase.from(table).select(columns[table] || "*");
+    // Riwayat aktivitas dibatasi satu tahun saat startup. Laporan bulan lama
+    // tetap dapat dimuat melalui query khusus, tanpa menahan login seluruh aplikasi.
+    if (fromDate || toDate) {
+      if (fromDate) query = query.gte("tanggal", fromDate);
+      if (toDate) query = query.lte("tanggal", toDate);
+      query = query.order("tanggal", { ascending: false }).order("id", { ascending: false });
+    }
+    else query = query.order("id");
+    query = query.range(offset, offset + 499);
+    const result = await withDbTimeout(query, `Memuat ${table}`);
     if (result.error) return result;
     data.push(...(result.data || []));
     if ((result.data || []).length < 500) return {data,error:null};
@@ -50,7 +66,7 @@ async function fetchRows(table) {
 }
 
 /* ---------- FETCH SEMUA DATA (dipanggil ulang setelah tiap mutasi) ---------- */
-export async function fetchAllData() {
+export async function fetchAllData({ includeActivity = true, activityFromDate = defaultActivityFromDate() } = {}) {
   const [classes, teachers, mentors, students, mentorAssignments, surahs, attendance, scores, profiles, certifications, riwayatPendidikan, schoolSettings] =
     await Promise.all([
       fetchRows("classes"),
@@ -59,8 +75,8 @@ export async function fetchAllData() {
       fetchRows("students"),
       fetchRows("mentor_assignments"),
       fetchRows("surahs"),
-      fetchRows("attendance"),
-      fetchRows("scores"),
+      includeActivity ? fetchRows("attendance", { fromDate: activityFromDate }) : Promise.resolve({ data: [], error: null }),
+      includeActivity ? fetchRows("scores", { fromDate: activityFromDate }) : Promise.resolve({ data: [], error: null }),
       fetchRows("profiles"),
       fetchRows("certifications"),
       fetchRows("riwayat_pendidikan"),
@@ -102,6 +118,25 @@ export async function fetchAllData() {
       id: r.id, teacherId: r.teacher_id, jenjang: r.jenjang, institusi: r.institusi, jurusan: r.jurusan, tahunLulus: r.tahun_lulus,
     })),
     schoolSettings: { stempelUrl: schoolSettings.data?.stempel_url || null },
+  };
+}
+
+// Aktivitas dimuat terpisah setelah dashboard tampil agar riwayat besar tidak
+// membuat pengguna melihat spinner tanpa batas. Hasilnya digabung di App.jsx.
+export async function fetchActivityData({ fromDate = defaultActivityFromDate(), toDate = null } = {}) {
+  const [attendance, scores] = await Promise.all([
+    fetchRows("attendance", { fromDate, toDate }),
+    fetchRows("scores", { fromDate, toDate }),
+  ]);
+  return {
+    attendance: mustOk(attendance, "attendance").map((a) => ({
+      id: a.id, studentId: a.student_id, tanggal: a.tanggal, status: a.status, note: a.note || "", inputBy: a.input_by,
+    })),
+    scores: mustOk(scores, "scores").map((s) => ({
+      id: s.id, studentId: s.student_id, tanggal: s.tanggal, surahId: s.surah_id,
+      ayatMulai: s.ayat_mulai, ayatAkhir: s.ayat_akhir, nilai: s.nilai, nilaiHuruf: s.nilai_huruf,
+      catatan: s.catatan || "", penguji: s.penguji, inputBy: s.input_by,
+    })),
   };
 }
 

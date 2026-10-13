@@ -27,7 +27,7 @@ import {
 } from "recharts";
 import { supabase } from "./supabaseClient.js";
 import {
-  fetchAllData, fetchStudentScores, fetchScoresForStudents, fetchAttendanceForDate, saveAttendanceBatch, insertScore, bulkInsertScores, insertStudent, bulkInsertStudents, bulkUpsertStudents,
+  fetchAllData, fetchActivityData, fetchStudentScores, fetchScoresForStudents, fetchAttendanceForDate, saveAttendanceBatch, insertScore, bulkInsertScores, insertStudent, bulkInsertStudents, bulkUpsertStudents,
   deleteStudent, insertClass, deleteClass, findOrCreateClassByName, updateClassTeacher,
   setProfileStatus, changeOwnPassword, sendPasswordResetEmail, createUserAccount,
   updateStudentClass, bulkUpdateStudentClass, bulkDeleteStudents,
@@ -1768,6 +1768,16 @@ function RekapView({ db, user, refresh }) {
   const [period, setPeriod] = useState(currentMonthKey());
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
+  const requestedPeriodRef = useRef("");
+  useEffect(() => {
+    if (!period || requestedPeriodRef.current === period) return;
+    const cutoff = new Date();
+    cutoff.setMonth(cutoff.getMonth() - 11);
+    const cutoffKey = cutoff.toISOString().slice(0, 7);
+    if (period >= cutoffKey) return;
+    requestedPeriodRef.current = period;
+    refresh({ activityMonth: period }).catch((error) => setExportError(`Riwayat ${monthLabel(period)} belum dapat dimuat: ${error.message}`));
+  }, [period]);
   const rows = (validStudent === "all" ? filteredStudents : filteredStudents.filter((s) => s.id === validStudent))
     .flatMap((s) => studentScores(db, s.id).map((sc) => ({ ...sc, _nama: s.nama })))
     .filter((r) => !period || monthKey(r.tanggal) === period)
@@ -2714,10 +2724,31 @@ export default function TahfidzApp() {
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
+  const [activityWarning, setActivityWarning] = useState("");
   const [view, setView] = useState("dashboard");
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
   const sessionHandledRef = useRef("");
+
+  async function syncActivity(cacheKey) {
+    try {
+      const activity = await fetchActivityData();
+      setDb((prev) => {
+        if (!prev) return prev;
+        const next = { ...prev, ...activity };
+        if (cacheKey) {
+          try { sessionStorage.setItem(`saqu-db-cache:${cacheKey}`, JSON.stringify({ savedAt: Date.now(), data: next })); } catch { /* cache is optional */ }
+        }
+        return next;
+      });
+      setActivityWarning("");
+      return activity;
+    } catch (e) {
+      console.warn("Sinkronisasi presensi dan penilaian gagal:", e);
+      setActivityWarning("Riwayat presensi dan penilaian belum termuat. Jalankan indeks Supabase pada panduan deploy, lalu coba lagi.");
+      throw e;
+    }
+  }
 
   async function refresh(options) {
     if (options?.attendanceFor) {
@@ -2726,6 +2757,24 @@ export default function TahfidzApp() {
       const ids = new Set(studentIds || []);
       setDb((prev) => prev ? { ...prev, attendance: [...prev.attendance.filter((row) => !(ids.has(row.studentId) && row.tanggal === date)), ...attendance] } : prev);
       return;
+    }
+    if (options?.activityMonth && /^\d{4}-(0[1-9]|1[0-2])$/.test(options.activityMonth)) {
+      const fromDate = `${options.activityMonth}-01`;
+      const nextMonth = new Date(`${fromDate}T12:00:00Z`);
+      nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
+      const toDate = new Date(nextMonth.getTime() - 86400000).toISOString().slice(0, 10);
+      const activity = await fetchActivityData({ fromDate, toDate });
+      setDb((prev) => {
+        if (!prev) return prev;
+        const merge = (oldRows, newRows) => {
+          const byId = new Map(oldRows.map((row) => [row.id, row]));
+          newRows.forEach((row) => byId.set(row.id, row));
+          return [...byId.values()];
+        };
+        return { ...prev, attendance: merge(prev.attendance, activity.attendance), scores: merge(prev.scores, activity.scores) };
+      });
+      setActivityWarning("");
+      return activity;
     }
     if (options?.scoresForMany?.length) {
       const studentIds = [...new Set(options.scoresForMany.filter(Boolean))];
@@ -2739,11 +2788,12 @@ export default function TahfidzApp() {
       return;
     }
     try {
-      const data = await fetchAllData();
+      const data = await fetchAllData({ includeActivity: !options?.initial });
       setDb(data);
       if (options?.cacheKey) {
         try { sessionStorage.setItem(`saqu-db-cache:${options.cacheKey}`, JSON.stringify({ savedAt: Date.now(), data })); } catch { /* cache is optional */ }
       }
+      if (options?.initial) syncActivity(options.cacheKey).catch(() => {});
       return data;
     } catch (e) {
       console.error("Gagal memuat data:", e);
@@ -2758,6 +2808,7 @@ export default function TahfidzApp() {
     if (!session) {
       setProfile(null);
       setDb(null);
+      setActivityWarning("");
       setLoading(false);
       return;
     }
@@ -2792,6 +2843,7 @@ export default function TahfidzApp() {
       return;
     }
     setAuthError("");
+    setActivityWarning("");
     setProfile({ id: prof.id, nama: prof.nama, role: prof.role, refId: prof.ref_id, status: prof.status });
     let cached = null;
     try {
@@ -2805,10 +2857,10 @@ export default function TahfidzApp() {
       setDb(cached);
       setLoading(false);
       // Tampilkan cache segera, lalu sinkronkan data terbaru tanpa memblokir layar.
-      refresh({cacheKey: prof.id}).catch(e => console.warn("Sinkronisasi data berjalan di latar belakang:", e));
+      syncActivity(prof.id).catch(e => console.warn("Sinkronisasi data berjalan di latar belakang:", e));
       return;
     }
-    try { await refresh({cacheKey: prof.id}); }
+    try { await refresh({cacheKey: prof.id, initial: true}); }
     catch (e) { setAuthError("Data aplikasi gagal dimuat: " + e.message); setProfile(null); setDb(null); }
     finally { setLoading(false); }
   }
@@ -2920,7 +2972,15 @@ export default function TahfidzApp() {
         onMenu={() => setMobileNavOpen(true)} onLogout={handleLogout} />
       <div style={{ display: "flex", flex: 1 }}>
         <Sidebar user={user} view={view} setView={setView} mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
-        <div className="app-content" style={{ flex: 1, padding: 28, maxWidth: 1180, minWidth: 0 }}>{content}</div>
+        <div className="app-content" style={{ flex: 1, padding: 28, maxWidth: 1180, minWidth: 0 }}>
+          {activityWarning && (
+            <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#FFF4D6", color: "#7A5E32", fontSize: 13, fontWeight: 600 }}>
+              <span>{activityWarning}</span>
+              <button className="t-btn t-btn-ghost" type="button" onClick={() => syncActivity(user.id).catch(() => {})}>Coba lagi</button>
+            </div>
+          )}
+          {content}
+        </div>
       </div>
     </div>
   );
