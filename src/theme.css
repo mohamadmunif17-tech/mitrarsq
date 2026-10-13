@@ -1,0 +1,94 @@
+/* Screen-only polish keeps existing monthly print/PDF styles intact. */
+@media screen {
+  body { margin: 0; }
+  .tahfidz-root.tahfidz-root { --paper:#f5f7f5; --line:#e2e9e4; --panel-soft:#f0f5f1; --gold:#b18c50; }
+  .tahfidz-root *, .tahfidz-root *::before, .tahfidz-root *::after { box-sizing:border-box; }
+  .tahfidz-root .t-card { border-radius:18px; box-shadow:0 4px 20px #193f3006; }
+  .tahfidz-root .t-card-soft { border-radius:14px; }
+  .tahfidz-root .t-btn { min-height:39px; }
+  .tahfidz-root button:disabled { opacity:.55; cursor:not-allowed; }
+  .tahfidz-root button:focus-visible { outline:3px solid #b18c50; outline-offset:3px; }
+  .tahfidz-root .t-input,.tahfidz-root .t-select { min-height:40px; }
+  .tahfidz-root .t-table th { padding:13px 12px; background:#f7f9f6; color:#60746b; }
+  .tahfidz-root .t-table td { padding:13px 12px; }
+  .tahfidz-root .t-table tbody tr:hover { background:#f8faf8; }
+  .portal-topbar { position:sticky; top:0; z-index:35; display:flex; align-items:center; gap:28px; min-height:76px; padding:12px 28px; border-bottom:1px solid #e2e9e4; background:#ffffff; }
+  .portal-brand { display:flex; align-items:center; gap:12px; min-width:204px; }
+  .portal-brand strong { font-size:18px; letter-spacing:-.5px; }
+  .portal-brand span:not(.portal-mark) { display:block; font-size:11px; color:#74857d; margin-top:2px; }
+  .portal-mark { width:40px; height:40px; display:grid; place-items:center; border-radius:12px; background:#1b3a34; color:#e6cd9c; }
+  .portal-breadcrumb { display:flex; align-items:center; gap:10px; font-size:12px; color:#788a80; }
+  .portal-breadcrumb strong { color:#254b3d; }
+  .portal-account { display:flex; align-items:center; gap:11px; margin-left:auto; }
+  .portal-avatar { width:38px; height:38px; border-radius:50%; display:grid; place-items:center; background:#edf3ef; color:#35644f; font-size:12px; font-weight:700; overflow:hidden; flex-shrink:0; }
+  .portal-avatar img { width:100%;height:100%;object-fit:cover; }
+  .portal-user { max-width:185px; }
+  .portal-user strong { display:block; font-size:12px; white-space:nowrap; overflow:hidden; text-overflow:ellipsis; }
+  .portal-user span { display:block; font-size:10px; color:#788a80; margin-top:4px; }
+  .portal-logout { display:flex; align-items:center; gap:7px; background:white; border:1px solid #e5d5ce; color:#985342; border-radius:10px; padding:10px 12px; cursor:pointer; margin-left:8px; font-family:inherit; font-size:12px; font-weight:600; white-space:nowrap; }
+  .portal-logout:hover { background:#fff5f1; }
+  .portal-menu,.portal-sidebar-close { display:none; border:0; background:transparent; color:inherit; cursor:pointer; padding:6px; }
+  .portal-alert { padding:12px 24px; color:#8a3e2e; background:#fff1ea; font-size:13px; }
+  .tahfidz-root .app-sidebar { position:sticky; top:76px; align-self:flex-start; height:calc(100dvh - 76px); min-height:0 !important; overflow-y:auto; flex-shrink:0; background:linear-gradient(170deg,#193e34,#132f2a) !important; }
+  .tahfidz-root .t-nav-item { width:100%; border:0; background:transparent; text-align:left; font-family:inherit; font-size:12px; padding:12px 14px; }
+  .tahfidz-root .t-nav-item.active { background:#e6d1a8; color:#213f31; font-weight:700; }
+  .tahfidz-root .t-nav-item:not(.active):hover { background:#ffffff10; }
+  .tahfidz-root .app-content { max-width:1320px !important; padding:30px !important; margin:0 auto; }
+  .portal-intro { display:flex; align-items:center; justify-content:space-between; gap:16px; padding:22px 25px; background:linear-gradient(110deg,#1f4a3c,#316650); border-radius:18px; color:white; margin-bottom:22px; }
+  .portal-intro small { display:block; color:#d4e5d7; font-size:10px; letter-spacing:1.5px; text-transform:uppercase; margin-bottom:8px; }
+  .portal-intro h2 { margin:0 0 6px; font-size:23px; font-weight:600; }
+  .portal-intro p { margin:0; color:#dce8dd; font-size:12px; line-height:1.6; }
+  .portal-intro-icon { display:grid; place-items:center; width:52px; height:52px; border:1px solid #ffffff30; border-radius:16px; color:#e6d1a8; flex-shrink:0; }
+  .teacher-attendance { padding:22px; margin-bottom:22px; }
+  .ta-heading { display:flex; gap:14px; justify-content:space-between; align-items:flex-start; margin-bottom:18px; flex-wrap:wrap; }
+  .ta-heading h3 { margin:0 0 5px; font-size:16px; }
+  .ta-heading p,.ta-muted { font-size:12px; color:#73857a; margin:0; line-height:1.6; }
+  .ta-actions { display:flex; align-items:center; gap:8px; flex-wrap:wrap; }
+  .ta-actions .t-input { width:auto; max-width:190px; }
+  .ta-today { display:flex; flex-direction:column; gap:12px; padding:20px; border-radius:14px; background:#f2f6f1; min-width:180px; }
+  .ta-today small { text-transform:uppercase; letter-spacing:1px; color:#647769; font-size:10px; }
+  .ta-summary { display:grid; grid-template-columns:1.4fr repeat(4,1fr); gap:12px; margin-bottom:15px; }
+  .ta-count { padding:18px 14px; border:1px solid #e6ece6; border-radius:14px; display:flex; flex-direction:column; gap:8px; }
+  .ta-count strong { font-size:25px; font-weight:600; }
+  .ta-count span { color:#718477; font-size:11px; }
+  .ta-badge { display:inline-flex;align-items:center;gap:6px;align-self:flex-start;border-radius:30px;padding:6px 10px;font-size:11px;font-weight:700;background:#edf1ed;color:#697a70;white-space:nowrap; }
+  .ta-badge::before { content:'';width:6px;height:6px;border-radius:50%;background:currentColor; }
+  .ta-badge.present { background:#dff0e6;color:#2c7049; }
+  .ta-badge.sick { background:#fcf0d9;color:#98702b; }
+  .ta-badge.permission { background:#e4eef9;color:#456f9d; }
+  .ta-badge.absent { background:#fbe7e2;color:#ab5947; }
+  .ta-table-wrap { overflow-x:auto; max-width:100%; }
+  .ta-admin-table { min-width:610px; }
+  .ta-teacher { display:flex;align-items:center;gap:10px;min-width:160px; }
+  .ta-teacher img { width:30px;height:40px;object-fit:cover;border-radius:5px; }
+  .ta-note { min-width:180px; }
+  .ta-savebar { margin-top:16px; display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap; }
+  .ta-message { border-radius:10px;padding:12px 14px;margin:12px 0;font-size:12px;line-height:1.6;background:#f0f5ee; }
+  .ta-message.error { background:#fff1eb;color:#974b39; }
+  .ta-history { margin-top:16px; }
+  .ta-history summary { cursor:pointer;font-size:12px;font-weight:600;padding:10px 0; }
+  .ta-history td:last-child { overflow-wrap:anywhere; max-width:350px; }
+  @media(max-width:1100px) { .portal-breadcrumb { display:none; } .ta-summary { grid-template-columns:repeat(4,1fr); } .ta-today { grid-column:1/-1; } }
+  @media(max-width:860px) {
+    .portal-topbar { min-height:68px;padding:12px 16px;gap:8px; }
+    .portal-brand { min-width:0;gap:8px; }
+    .portal-menu,.portal-sidebar-close { display:block; }
+    .portal-sidebar-close { margin:0 0 12px auto;color:white; }
+    .portal-mark { display:none; }
+    .portal-user { display:none; }
+    .portal-brand strong { font-size:16px; }
+    .tahfidz-root .app-sidebar { top:0;height:100dvh; }
+    .tahfidz-root .app-content { padding:18px !important; }
+    .teacher-attendance { padding:18px; }
+  }
+  @media(max-width:480px) {
+    .portal-avatar { display:none; }
+    .portal-intro { padding:18px; } .portal-intro h2 { font-size:20px; }
+    .portal-intro-icon { display:none; }
+    .ta-summary { grid-template-columns:repeat(2,1fr);gap:9px; }
+    .ta-count { padding:13px; }
+    .ta-actions { width:100%; }
+    .ta-heading { gap:12px; }
+    .ta-actions .t-input { flex:1; }
+  }
+}

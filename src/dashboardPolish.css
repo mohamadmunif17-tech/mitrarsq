@@ -1,0 +1,32 @@
+/* Higher specificity keeps the SAQU palette independent of CSS bundle order. */
+@media screen {
+  .tahfidz-root.tahfidz-root { --ink:#27272a; --paper:#f7f7f8; --line:#e4e4e7; --panel-soft:#f4f4f5; --gold:#64748b; --gold-soft:#eef1f5; }
+  .tahfidz-root.tahfidz-root .portal-topbar { background:#fff; border-bottom:1px solid #e4e4e7; }
+  .tahfidz-root.tahfidz-root .t-btn-primary { background:#c62032; }
+  .tahfidz-root.tahfidz-root .t-btn-primary:hover:not(:disabled) { background:#a81728; }
+  .tahfidz-root.tahfidz-root .t-btn-gold { background:#34343b; }
+  .saqu-menu-caption { color:#b7b7c0; font-size:10px; font-weight:600; letter-spacing:.12em; padding:7px 14px 16px; }
+  .tahfidz-root.tahfidz-root .saqu-header-logo { width:156px; height:56px; object-fit:contain; }
+  @media(max-width:860px) { .tahfidz-root.tahfidz-root .saqu-header-logo { width:120px; height:48px; } }
+  .tahfidz-root.tahfidz-root .app-sidebar { background:#29292e !important; scrollbar-color:#60606b #29292e; }
+  .tahfidz-root.tahfidz-root .t-nav-item { color:#e4e4e7; border-radius:10px; }
+  .tahfidz-root.tahfidz-root .t-nav-item.active { color:#fff; background:#c62032; box-shadow:0 4px 12px #0002; }
+  .tahfidz-root.tahfidz-root .t-nav-item:not(.active):hover { background:#3b3b43; color:#fff; }
+  .tahfidz-root.tahfidz-root .portal-intro { background:#29292f; border-left:4px solid #c62032; }
+  .tahfidz-root.tahfidz-root .portal-intro small,.tahfidz-root.tahfidz-root .portal-intro-icon { color:#fca5af; }
+  .tahfidz-root.tahfidz-root .portal-intro p { color:#e4e4e7; }
+  .tahfidz-root.tahfidz-root .font-display,.tahfidz-root.tahfidz-root .font-mono { font-family:'Inter','Segoe UI',sans-serif; }
+  .tahfidz-root.tahfidz-root .t-card-soft { background:#f7f7f9; }
+  .saqu-teacher-chart h3 { margin:0 0 5px; font-size:14px; }
+  .saqu-chart-caption { margin:0 0 20px; font-size:12px; color:#71717a; line-height:1.6; }
+  .saqu-chart-rows { display:grid; gap:17px; }
+  .saqu-chart-label { display:flex; justify-content:space-between; align-items:baseline; gap:16px; font-size:12px; margin-bottom:7px; }
+  .saqu-chart-label span { overflow-wrap:anywhere; font-weight:500; }
+  .saqu-chart-label strong { font-size:15px; color:#b91c30; font-variant-numeric:tabular-nums; flex-shrink:0; }
+  .saqu-chart-track { height:8px; border-radius:20px; background:#f0f0f3; overflow:hidden; }
+  .saqu-chart-track > div { height:100%; border-radius:20px; background:#c62032; }
+  .saqu-chart-row small { display:block; margin-top:5px; font-size:10px; color:#71717a; }
+  .saqu-chart-pending { margin-top:20px; padding-top:14px; border-top:1px solid #e4e4e7; font-size:12px; color:#62626c; }
+  .saqu-chart-pending summary { cursor:pointer; padding:8px 0; min-height:40px; }
+  .saqu-chart-pending ul { margin:6px 0 0; padding-left:18px; line-height:1.9; }
+}

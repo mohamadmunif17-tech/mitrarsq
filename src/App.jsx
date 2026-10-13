@@ -1,4 +1,19 @@
-import { useState, useEffect } from "react";
+import { surahNumber, sortSurahs, surahsForJuz } from "./quranOrder.js";
+import { resolvePicSignature } from "./reportSignature.js";
+import AlertList from "./StudentAttentionList.jsx";
+import { tahfidzData, isTahfidzStudent } from "./studentEligibility.js";
+import StudentReligionEditor from "./StudentReligionEditor.jsx";
+import "./studentUpdate.css";
+import "./userManagement.css";
+import RoleChangeButton from "./RoleChangeButton.jsx";
+import AppHeader from "./AppHeader.jsx";
+import { TeacherAttendanceAdmin, TeacherAttendanceDashboard } from "./TeacherAttendance.jsx";
+import "./theme.css";
+import "./dashboardPolish.css";
+import { AdminUserActions, DeleteScoreButton } from "./ExtraFeatures.jsx";
+import { PIC_TAHFIDZ, defaultReportDate, longDateID } from "./reportTools.js";
+import { fetchReportMonthSettings, saveReportMonthSettings } from "./db.js";
+import { useState, useEffect, useRef } from "react";
 import {
   LayoutDashboard, ClipboardCheck, BookOpen, Users, Settings, BarChart3,
   FileText, LogOut, CheckCircle2, XCircle, MinusCircle, CircleDot,
@@ -10,16 +25,32 @@ import {
   LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid,
   BarChart, Bar,
 } from "recharts";
-import * as XLSX from "xlsx";
 import { supabase } from "./supabaseClient.js";
 import {
-  fetchAllData, saveAttendanceBatch, insertScore, insertStudent, bulkInsertStudents,
+  fetchAllData, fetchStudentScores, fetchScoresForStudents, fetchAttendanceForDate, saveAttendanceBatch, insertScore, bulkInsertScores, insertStudent, bulkInsertStudents, bulkUpsertStudents,
   deleteStudent, insertClass, deleteClass, findOrCreateClassByName, updateClassTeacher,
   setProfileStatus, changeOwnPassword, sendPasswordResetEmail, createUserAccount,
   updateStudentClass, bulkUpdateStudentClass, bulkDeleteStudents,
   uploadFile, updateOwnSignature, updateTeacherProfile, addCertification, deleteCertification,
   updateSchoolStamp, fetchRiwayatPendidikan, addRiwayatPendidikan, deleteRiwayatPendidikan,
 } from "./db.js";
+
+const CLIENT_REQUEST_TIMEOUT_MS = 15000;
+let xlsxModulePromise;
+
+function withClientTimeout(request, label, timeoutMs = CLIENT_REQUEST_TIMEOUT_MS) {
+  let timer;
+  const timeout = new Promise((_, reject) => {
+    timer = setTimeout(() => reject(new Error(`${label} belum merespons setelah ${Math.round(timeoutMs / 1000)} detik.`)), timeoutMs);
+  });
+  return Promise.race([Promise.resolve(request), timeout]).finally(() => clearTimeout(timer));
+}
+
+async function loadXlsx() {
+  xlsxModulePromise ||= import("xlsx");
+  const module = await xlsxModulePromise;
+  return module.default?.utils ? module.default : module;
+}
 
 
 export const SMK_LOGO = "data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAASYAAABPCAMAAABxlpjOAAABFFBMVEXoIynoIynoIynoIynoIynoIynoIynoIynoIynoIynoIynoIynoIynoIynoIymuHySuHySuHySuHySuHySuHyTHISauHySuHySuHySuHySuHySuHySuHySuHyTPISfQISdZWVxfX2JZWVxZWVxZWVx3eHuAgYSAgYSAgYSAgYSAgYSAgYSAgYSAgYSAgYSAgYSAgYSAgYSAgYSAgYSAgYRZWVxZWVxZWVxZWVxZWVxZWVxZWVxZWVxZWVxZWVxZWVxiYmUjHyAjHyAjHyAjHyAjHyAjHyAjHyAjHyAjHyAjHyAjHyAjHyAjHyAjHyAjHyAAAADoIymuHyRZWVxjY2ZoaGttbXBvcHN2d3p5en2AgYQjHyDhv0ErAAAAUXRSTlPw4NDAsKCQgHBgUEAwIBAQIDBAUGBxgJCgsMDQ4PDgwcDI0ODw9/Dg0MCwoJCAcGBQQDAgEBAgMEBQYHCAkKCw2eDw0MCwoJCAcGBQQDAgEAA2wG/QAAAIWUlEQVR42u2ca1/bRhaHoTTNLqRJms3SljRdNmGTdNOWkAAxxCxr3a3bnNa9Wt//e1SyR/MfjWYkGez8sM3zJsNYEpqHc45G0jgbP21u3bl7d3tnZ+ceXYVHOY93d7/ee/ozrS4bP+nY2MrdbX9Odb54nBvZ+1nH+mnibN7ZJokHj79+OhVyq0k19TchabdwdKvJJGoaUYWkW01NfHqfHj7JNdxqambzn5NQutXUwrcTDbeabjXdapoDC9aU+g5wGe+ddiYkiOSOxHF8KmFB/kFIIHRUfNLiiwOGRet6LFZTmFWwp568bILFiBPzjmRiycqbHnHsrCClkiRTwMag/CUDVp6EdU1PC9UUZQoxFWQcESQ+7wgox5k0Mdgclybg09pha8Q44KTl0LVYpCZmaf7s0ITRD0yahghCfXzyz5daU8hH4XDK5MhK+PDSzKApRHIqtWmai4Oy5C21pgCnWiFTsm5o0JRYqFgGC5zl12RRjUzJOkejCTkbUcGqa9KcX1bNOpZpNTFbirgWTaEwPfDSJk1BUQZ9ZZ/M5deAye90HN7HhpOW5cYfQZNNNSbDgYOoOJe6Jleu+g2auFAQmjV5mTglN5PxxfQDDERruHhNmPNUNE2LsFueu6tqUqYCRk3YA8QmTSGmZ35WZcjPTE+0eE12RACaApF1VhEBqqZQvtQbNaEtMzBoiviYcXEFFmvSZG18tpWbmoOmb/Z2tZqAFTBJU1ImSNEYxIomnHu7Jo8XmCAIrGkz1WpKLORkgH1sLk9sarmBw327Ac+8Dcq5t7Pz97syn25tNmh6svfVrsw/Hj16SMA8CR8k0DSdU7rTM/ZrmvBzqyYHRYybiHWaWGkJmjxUNiXwUAQcaNJxf/uzTY2mJ7uPqDMDzXxZaPL5dKE4y8gQTWl3TQhgvSZuw5O3M88d0BdBk4l7d6qann75kLqCP261Upaa+JlEbHK+FU3AnkFTSzThwjmbphiazHy+JWn68gHNSCLFEy44vDEZkhcWqVfX5ONC3U1TEKA2MXXs0L4YTUTbG1zTN1/QFQh9ZwpPI4Imb1ovixirayJU1nZNCi6ZNAUL00T3Pplo2ntA14LnA0ETKnyq0ZRaKE+dNWEXvaYsXpgmuv9JrukrqnLa6/XPe++pO76qiSEV6pqERXtWTYNEO3ZnqpDNQ9Plfs5Fv3dS9bT57V5F0YfLgxHn2UVXVYGiCfcLvlYToTx10eRM8ULD2Hl0OvPQdC5G/+FUzrt/SRl3tj+q8uycwCyaQmSCThPKUxdNbU8Iyt8WzEETHWD0lz3S0Hs+qrPfJaKcmqYUZV2nSZQn1kUTa9EkgjeGpoQKhrNr+t9I4vKUFE4uRloOWgOKBbzSlJoQLq5eE8LN6aLJZm2a2AAVPpg2E/yS4Sya+tXRnymWno1M6D15mYInNOHvGBo0Yf/ApEl765g0Z1Jmw41EcnVNo1G/xRJQUxQaZNKKpoT3GTThSVLcpCnNVE8GTbgo1N9mOHQdTaMP1Yw08/xEW44A7jstcVqDMg9xWryEVGdblllTNTREd1LTVL0oRKpaaHKvoGl01qwJ9Fvv6ayo7C5PK8TTEFFemM19QoEyycT25UZW/f46RAsakoEIzshS5lpiUyaOj1arpgNESa9R03OqkwQSkdSdiFZcJmgQ8FEzeVNKg5yEgLx9CQsDwLtD0YpwAJbvFoTYB2eGTXF8tFRNjVGy3+ipR6tLu6YDEpweNGfd6lLX1FSd3jd52qfVpYOmPnXz9G9aXVRNbVFycmnU9B9aXbpqAmfP9ZZ+GdPqMrsmonPtFe9Pjaa4gBFIi46UgG6fay7ZWgTdNb09lC555/19Jah+H9c1efIMV3ntCur7hHTT6K7paPwjVTg9u4CqX8fQpN7SueobKYuAdp8bF0+zaBr/95gU3l8cCEtj41tfpi6cJAN40XbDmEnT+MUhqZz0c1G/jRs1RWWorImm8fi7N6Ry+v8/xs2aPN5hr42m8fjlj+9I5u3rotesCbWIZWukKefV94dHVPDuzfeveJ9RE7IurGpiARimGk1JAEIm3cTnH0fT3Zj5ccRcuZImhXZNnvLIV7PGza9pSizlYRVc+1bZOyRO6mRg7pOKhWuykXWWWKkHIcBTNWHcckhmCr5hDbpF82ThmgIxxKSQVlnOXCVUNIXdFrTFiNQKNE8Wrime2PD4A3sfmmqeHFkT2opH/TdWWLbsmrwyBezip1ITQJUyXukSC0KwRDm1xUpLiuWC5CyjpohnXVrY0g+BDZo1UYRwK1sIIWjyaXk1EY+EyXovwxCcFk1xXRN2wwbBMmtyJ1k3+SfEECozHVM0hfxzbw00Ta9Yk7xJ5SEwJwM6TfEgK1kDTUx8tcHGEFC4tZr40NdJEwkffrUKtWgarJmmIWaC0hAsPvYCS9WE2aXl5NjroCnlliwMwTDTgSYsQVqXK51IH7euyacWTdHaTAjEuqKwrslmmGXXNeHZQjdNNlsCTS/1mvAMPMUQRCbacRxHWMRU05R5+QZYNGfSlJRHK7BvsqYXb/WaRLm2MTLthcyrako0zwKMmmhwU259371qs2TW5Ik6hJFFtS8HmJ83wY1JU3RTNBEdvjRben1MNYZi8JF4+ebjkZmne9w4hDHMP+XCY0uV35W+hhDeGE1Eb16/0Et6Z3iDayUisNyyT3RGAylUEsltXC6bsxBrPsNTF1vTptj9eJp6/TrnJHP0w3dVVS9fHx6TASwXSEQrRielMYeRIIkT6QAl6GLYGu0Kiy/h3Tg+OvphypujY7ppeIt/Fr68sIDjlnPZebIqmpidfcQXUEtLAEHz+D9RVlWT8prGZTRXVkUTJQ7w5r4G4S8GGLj5m7vujwAAAABJRU5ErkJggg==";
@@ -51,6 +82,14 @@ const GlobalStyle = () => (
     }
     .tahfidz-root .font-display { font-family: 'Fraunces', serif; }
     .tahfidz-root .font-mono { font-family: 'IBM Plex Mono', monospace; }
+    .dashboard-clock { min-width:164px; padding:9px 12px; border:1px solid #e4e4e7; border-radius:12px; background:#fff; color:#27272a; text-align:right; box-shadow:0 3px 12px #18181b0b; }
+    .dashboard-clock-time { font-size:19px; font-weight:800; line-height:1.15; letter-spacing:.035em; font-variant-numeric:tabular-nums; white-space:nowrap; }
+    .dashboard-clock-date { margin-top:4px; color:#71717a; font-size:11px; line-height:1.25; white-space:nowrap; }
+    .dashboard-intro-actions { display:flex; align-items:center; gap:12px; flex-shrink:0; }
+    .dashboard-intro { flex-wrap:wrap; }
+    .dashboard-section-heading { display:flex; align-items:flex-start; justify-content:space-between; gap:16px; flex-wrap:wrap; }
+    .portal-intro .dashboard-clock { border-color:#ffffff24; background:#ffffff12; color:#fff; box-shadow:none; }
+    .portal-intro .dashboard-clock-date { color:#f4f4f5; }
 
     .t-card {
       background: var(--panel);
@@ -149,6 +188,11 @@ const GlobalStyle = () => (
       .grid-3 { grid-template-columns: repeat(2, 1fr); }
       .grid-2 { grid-template-columns: 1fr; }
     }
+    @media (max-width: 600px) {
+      .dashboard-intro { flex-direction:column; align-items:stretch; }
+      .dashboard-intro-actions { width:100%; justify-content:space-between; }
+      .dashboard-intro-actions .dashboard-clock { text-align:left; }
+    }
     @media (max-width: 480px) {
       .grid-4 { grid-template-columns: 1fr; }
       .grid-3 { grid-template-columns: 1fr; }
@@ -173,7 +217,7 @@ const GlobalStyle = () => (
     .report-stat-box { background: var(--panel-soft); border-radius: 10px; padding: 12px; text-align: center; }
     .report-sig { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-top: 34px; }
     .report-sig div { text-align: center; font-size: 12.5px; }
-    .report-sig .line { margin-top: 46px; border-top: 1px solid var(--ink); padding-top: 4px; font-weight: 600; }
+    .report-sig .line { margin-top: 12px; border-top: 1px solid var(--ink); padding-top: 4px; font-weight: 600; }
 
     @media print {
       .no-print { display: none !important; }
@@ -223,6 +267,9 @@ function monthLabel(mk) {
   const [y, m] = mk.split("-").map(Number);
   return new Date(y, m - 1, 1).toLocaleDateString("id-ID", { month: "long", year: "numeric" });
 }
+function safeExportName(value) {
+  return String(value || "kelas").replace(/[^a-zA-Z0-9._-]+/g, "_").slice(0, 60);
+}
 function lastMonthOptions(n = 6) {
   const opts = [];
   let mk = currentMonthKey();
@@ -252,14 +299,14 @@ function teacherClasses(db, teacherId) {
 }
 function teacherStudents(db, teacherId) {
   const classIds = teacherClasses(db, teacherId).map((c) => c.id);
-  return db.students.filter((s) => classIds.includes(s.kelasId));
+  return db.students.filter((s) => classIds.includes(s.kelasId) && isTahfidzStudent(s));
 }
 function classListLabel(classes) {
   return classes.length ? classes.map((c) => c.nama).join(", ") : "Belum ada kelas ditugaskan";
 }
 function mentorStudents(db, mentorId) {
   const ids = db.mentorAssignments.filter((ma) => ma.mentorId === mentorId).map((ma) => ma.studentId);
-  return db.students.filter((s) => ids.includes(s.id));
+  return db.students.filter((s) => ids.includes(s.id) && isTahfidzStudent(s));
 }
 function studentScores(db, studentId) {
   return db.scores.filter((s) => s.studentId === studentId).sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
@@ -317,30 +364,7 @@ function buildLeaderboard(db, students, limit = 5) {
     .slice(0, limit);
 }
 
-function AlertList({ alerts }) {
-  if (!alerts.length) {
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 8, color: "var(--teal)", fontSize: 13, fontWeight: 600, padding: "8px 2px" }}>
-        <CheckCircle2 size={16} /> Tidak ada siswa yang perlu perhatian khusus saat ini.
-      </div>
-    );
-  }
-  return (
-    <div style={{ display: "flex", flexDirection: "column", gap: 8 }}>
-      {alerts.map(({ student, reasons }) => (
-        <div key={student.id} className="t-card-soft" style={{ padding: "10px 12px", display: "flex", alignItems: "flex-start", gap: 10 }}>
-          <div style={{ color: "var(--red)", flexShrink: 0, marginTop: 1 }}><AlertTriangle size={16} /></div>
-          <div>
-            <div style={{ fontWeight: 700, fontSize: 13 }}>{student.nama}</div>
-            <div style={{ fontSize: 11.5, color: "#8A8064" }}>{reasons.join(" · ")}</div>
-          </div>
-        </div>
-      ))}
-    </div>
-  );
-}
-
-function Leaderboard({ rows }) {
+function Leaderboard({ rows, db }) {
   if (!rows.length) return <Empty text="Belum ada data setoran bulan ini." />;
   const medalColor = ["#B08D57", "#9CA3AF", "#B5754A"];
   return (
@@ -354,7 +378,7 @@ function Leaderboard({ rows }) {
             {i < 3 ? <Trophy size={13} /> : <span style={{ fontSize: 11, fontWeight: 700 }}>{i + 1}</span>}
           </div>
           <div style={{ flex: 1 }}>
-            <div style={{ fontWeight: 600, fontSize: 13 }}>{r.student.nama}</div>
+            <div style={{ fontWeight: 600, fontSize: 13 }}>{r.student.nama}</div><div className="student-class-label">{className(db, r.student.kelasId)}</div>
             <div style={{ fontSize: 11, color: "#8A8064" }}>Rata-rata nilai {r.avgNilai}</div>
           </div>
           <div className="font-mono" style={{ fontWeight: 700, color: "var(--teal)", fontSize: 14 }}>{r.count}x</div>
@@ -416,6 +440,36 @@ function SectionTitle({ children, sub }) {
   );
 }
 
+function DashboardClock() {
+  const [now, setNow] = useState(() => new Date());
+  useEffect(() => {
+    const timer = window.setInterval(() => setNow(new Date()), 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  const timeText = new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    hour: "2-digit",
+    minute: "2-digit",
+    second: "2-digit",
+    hour12: false,
+  }).format(now);
+  const dateText = new Intl.DateTimeFormat("id-ID", {
+    timeZone: "Asia/Jakarta",
+    weekday: "long",
+    day: "2-digit",
+    month: "long",
+    year: "numeric",
+  }).format(now);
+
+  return (
+    <div className="dashboard-clock" role="group" aria-label={`Waktu saat ini ${dateText}, ${timeText} WIB`}>
+      <div className="dashboard-clock-time">{timeText} WIB</div>
+      <div className="dashboard-clock-date">{dateText}</div>
+    </div>
+  );
+}
+
 function Empty({ text }) {
   return <div style={{ padding: 24, textAlign: "center", color: "#8A8064", fontSize: 13 }}>{text}</div>;
 }
@@ -461,31 +515,30 @@ function LoginScreen({ onLoginSuccess }) {
   }
 
   return (
-    <div className="tahfidz-root" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div className="tahfidz-root saqu-auth" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <GlobalStyle />
       <form onSubmit={mode === "login" ? handleSubmit : handleForgot} style={{ width: "100%", maxWidth: 400 }}>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 14 }}>
-            <img src={SMK_LOGO} alt="Logo SMK Telkom Malang" style={{ height: 32, objectFit: "contain" }} />
-            <div style={{ width: 1, height: 26, background: "var(--line)" }} />
-            <img src={RUTABA_LOGO} alt="Logo Rutaba Shohibul Qur'an" style={{ height: 40, objectFit: "contain", borderRadius: "50%" }} />
+            <div className="saquin-mark saquin-login-mark" aria-hidden="true">S</div>
+            <div className="saquin-login-wordmark"><strong>SAQUIN</strong><span>Sahabat Quran Indonesia</span></div>
           </div>
-          <h1 className="font-display" style={{ fontSize: 30, fontWeight: 700, margin: 0 }}>Monitoring Tahfidz</h1>
+          <h1 className="saqu-auth-title">{mode === "login" ? "Selamat datang" : "Lupa password?"}</h1>
           <p style={{ color: "#8A8064", marginTop: 6, fontSize: 14 }}>
-            {mode === "login" ? "SMK Telkom Malang — masuk dengan akun yang diberikan Admin" : "Masukkan email untuk menerima link reset password"}
+            {mode === "login" ? "Masuk ke akun SAQUIN Anda." : "Masukkan email untuk menerima link reset password"}
           </p>
         </div>
 
         <div className="t-card" style={{ padding: 24 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
-              <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Email</label>
-              <input type="email" className="t-input" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@sekolah.sch.id" required />
+              <label htmlFor="saqu-email" style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Email</label>
+              <input id="saqu-email" type="email" className="t-input" autoComplete="username" value={email} onChange={(e) => setEmail(e.target.value)} placeholder="nama@sekolah.sch.id" required />
             </div>
             {mode === "login" && (
               <div>
-                <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Password</label>
-                <input type="password" className="t-input" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
+                <label htmlFor="saqu-password" style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>Password</label>
+                <input id="saqu-password" type="password" className="t-input" autoComplete="current-password" value={password} onChange={(e) => setPassword(e.target.value)} required />
               </div>
             )}
             {error && <div style={{ fontSize: 12.5, color: "var(--red)", fontWeight: 600 }}>{error}</div>}
@@ -514,9 +567,11 @@ function LoginScreen({ onLoginSuccess }) {
 const NAV_BY_ROLE = {
   admin: [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "teacher-attendance", label: "Kehadiran Pengajar", icon: CalendarCheck },
     { id: "master", label: "Master Data", icon: Users },
     { id: "userman", label: "Manajemen User", icon: UserCog },
     { id: "monitoring", label: "Monitoring", icon: BarChart3 },
+    { id: "rekap", label: "Rekap Kelas", icon: FileText },
     { id: "report", label: "Report Bulanan", icon: FileText },
     { id: "profil", label: "Profil Saya", icon: Stamp },
     { id: "password", label: "Ganti Password", icon: KeyRound },
@@ -614,13 +669,13 @@ function ResetPasswordScreen({ onDone }) {
   }
 
   return (
-    <div className="tahfidz-root" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
+    <div className="tahfidz-root saqu-auth" style={{ minHeight: "100vh", display: "flex", alignItems: "center", justifyContent: "center", padding: 24 }}>
       <GlobalStyle />
       <form onSubmit={submit} style={{ width: "100%", maxWidth: 400 }}>
         <div style={{ textAlign: "center", marginBottom: 28 }}>
           <div style={{ display: "flex", alignItems: "center", justifyContent: "center", gap: 14, marginBottom: 14 }}>
-            <img src={SMK_LOGO} alt="Logo SMK Telkom Malang" style={{ height: 32, objectFit: "contain" }} />
-            <img src={RUTABA_LOGO} alt="Logo Rutaba" style={{ height: 40, borderRadius: "50%", objectFit: "contain" }} />
+            <div className="saquin-mark saquin-login-mark" aria-hidden="true">S</div>
+            <div className="saquin-login-wordmark"><strong>SAQUIN</strong><span>Sahabat Quran Indonesia</span></div>
           </div>
           <h1 className="font-display" style={{ fontSize: 26, fontWeight: 700, margin: 0 }}>Atur Password Baru</h1>
           <p style={{ color: "#8A8064", marginTop: 6, fontSize: 14 }}>Masukkan password baru untuk akun Anda</p>
@@ -688,6 +743,8 @@ function ProfilSaya({ db, refresh, user }) {
   const [saving, setSaving] = useState(false);
   const [saveMsg, setSaveMsg] = useState("");
   const [uploadingFoto, setUploadingFoto] = useState(false);
+  const [photoPreview, setPhotoPreview] = useState(teacher?.fotoUrl || "");
+  useEffect(() => { setPhotoPreview(teacher?.fotoUrl || ""); }, [teacher?.fotoUrl]);
   const [uploadingTtd, setUploadingTtd] = useState(false);
   const [uploadingStempel, setUploadingStempel] = useState(false);
 
@@ -702,10 +759,14 @@ function ProfilSaya({ db, refresh, user }) {
   async function handleFotoUpload(e) {
     const file = e.target.files[0];
     if (!file || !teacher) return;
+    if (!["image/jpeg", "image/png"].includes(file.type) || file.size > 5 * 1024 * 1024) {
+      alert("Gunakan foto JPG/PNG maksimal 5 MB."); e.target.value = ""; return;
+    }
     setUploadingFoto(true);
     try {
       const url = await uploadFile(file, `foto/${teacher.id}`);
       await updateTeacherProfile(teacher.id, { fotoUrl: url });
+      setPhotoPreview(url);
       await refresh();
     } catch (err) {
       alert("Gagal unggah foto: " + err.message);
@@ -748,9 +809,9 @@ function ProfilSaya({ db, refresh, user }) {
     setSaveMsg("");
     try {
       await updateTeacherProfile(teacher.id, form);
-      await refresh();
       setSaveMsg("Profil tersimpan.");
-      setTimeout(() => setSaveMsg(""), 2000);
+      try { await refresh(); } catch { setSaveMsg("Profil sudah tersimpan, tetapi tampilan gagal diperbarui. Muat ulang halaman."); }
+
     } catch (err) {
       setSaveMsg("Gagal: " + err.message);
     }
@@ -811,10 +872,10 @@ function ProfilSaya({ db, refresh, user }) {
         <div style={{ display: "flex", flexDirection: "column", gap: 16 }}>
           {teacher && (
             <div className="t-card" style={{ padding: 18 }}>
-              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Foto Profil</div>
+              <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Foto Profil (3 × 4)</div>
               <div style={{ display: "flex", alignItems: "center", gap: 14 }}>
-                <div style={{ width: 64, height: 64, borderRadius: "50%", overflow: "hidden", background: "var(--panel-soft)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
-                  {teacher.fotoUrl ? <img src={teacher.fotoUrl} alt="Foto" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={22} color="#B4AA8C" />}
+                <div style={{ width: 90, height: 120, borderRadius: 6, overflow: "hidden", background: "var(--panel-soft)", flexShrink: 0, display: "flex", alignItems: "center", justifyContent: "center" }}>
+                  {photoPreview ? <img src={photoPreview} alt="Pasfoto pengajar 3 x 4" style={{ width: "100%", height: "100%", objectFit: "cover" }} /> : <ImageIcon size={22} color="#B4AA8C" />}
                 </div>
                 <label className="t-btn t-btn-ghost" style={{ cursor: "pointer" }}>
                   {uploadingFoto ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {uploadingFoto ? "Mengunggah..." : "Ganti Foto"}
@@ -826,7 +887,7 @@ function ProfilSaya({ db, refresh, user }) {
 
           <div className="t-card" style={{ padding: 18 }}>
             <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 12 }}>Tanda Tangan Digital</div>
-            <SignatureUploader label={isAdmin ? "Tanda Tangan Kepala Program" : "Tanda Tangan Pengajar"} currentUrl={myProfile?.signatureUrl} onUpload={handleSignatureUpload} uploading={uploadingTtd} />
+            <SignatureUploader label={isAdmin ? "Tanda Tangan Kepala Program / PIC Tahfidz" : "Tanda Tangan Pengajar"} currentUrl={myProfile?.signatureUrl} onUpload={handleSignatureUpload} uploading={uploadingTtd} />
           </div>
 
           {isAdmin && (
@@ -985,7 +1046,7 @@ function ProfilSaya({ db, refresh, user }) {
 }
 
 
-function Sidebar({ user, view, setView, onLogout, mobileOpen, onClose }) {
+function Sidebar({ user, view, setView, mobileOpen, onClose }) {
   const items = NAV_BY_ROLE[user.role];
   function handleNav(id) {
     setView(id);
@@ -995,26 +1056,19 @@ function Sidebar({ user, view, setView, onLogout, mobileOpen, onClose }) {
     <>
       <div className={`sidebar-overlay ${mobileOpen ? "open" : ""}`} onClick={onClose} />
       <div className={`no-print app-sidebar ${mobileOpen ? "open" : ""}`} style={{ width: 232, background: "var(--ink)", minHeight: "100vh", padding: 18, display: "flex", flexDirection: "column", flexShrink: 0 }}>
-        <div style={{ display: "flex", alignItems: "center", gap: 9, marginBottom: 26, padding: "0 4px" }}>
-          <img src={RUTABA_LOGO} alt="Logo Rutaba" style={{ width: 30, height: 30, borderRadius: "50%", objectFit: "cover", flexShrink: 0 }} />
-          <div>
-            <div className="font-display" style={{ color: "white", fontWeight: 700, fontSize: 15, lineHeight: 1.1 }}>Tahfidz</div>
-            <div style={{ color: "#B4AA8C", fontSize: 10 }}>SMK Telkom Malang</div>
-          </div>
-        </div>
+        <button className="portal-sidebar-close" aria-label="Tutup menu" onClick={onClose}><XCircle size={22} /></button>
+        <div className="saqu-menu-caption">MENU UTAMA</div>
         <div style={{ display: "flex", flexDirection: "column", gap: 3, flex: 1 }}>
           {items.map((it) => (
-            <div key={it.id} className={`t-nav-item ${view === it.id ? "active" : ""}`} onClick={() => handleNav(it.id)}>
+            <button type="button" key={it.id} className={`t-nav-item ${view === it.id ? "active" : ""}`} aria-current={view === it.id ? "page" : undefined} onClick={() => handleNav(it.id)}>
               <it.icon size={16} /> {it.label}
-            </div>
+            </button>
           ))}
         </div>
         <div style={{ borderTop: "1px solid rgba(255,255,255,0.12)", paddingTop: 14, marginTop: 14 }}>
           <div style={{ color: "white", fontSize: 13, fontWeight: 600 }}>{user.nama}</div>
           <div style={{ color: "#B4AA8C", fontSize: 11, marginBottom: 10 }}>{ROLE_LABEL[user.role]}</div>
-          <div className="t-nav-item" onClick={onLogout}>
-            <LogOut size={16} /> Keluar
-          </div>
+
         </div>
       </div>
     </>
@@ -1029,7 +1083,7 @@ function DashboardAdmin({ db }) {
   const perTeacher = db.teachers.map((t) => {
     const ids = teacherStudents(db, t.id).map((m) => m.id);
     const gs = monthScores.filter((s) => ids.includes(s.studentId));
-    return { nama: t.nama, rataNilai: avg(gs.map((s) => s.nilai)) || 0 };
+    return { id: t.id, nama: t.nama, jumlah: gs.length, rataNilai: avg(gs.map((s) => s.nilai)) || 0 };
   });
   const recent = [...db.scores].sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1)).slice(0, 6);
   const alerts = buildAlerts(db, db.students);
@@ -1037,25 +1091,28 @@ function DashboardAdmin({ db }) {
 
   return (
     <div>
-      <SectionTitle sub="Ringkasan aktivitas tahfidz seluruh sekolah bulan ini">Dashboard Admin</SectionTitle>
+      <div className="portal-intro dashboard-intro"><div><small>Dashboard admin</small><h2>Kelola kegiatan tahfidz</h2><p>Ringkasan aktivitas siswa dan pengajar di SMK Telkom Malang.</p></div><div className="dashboard-intro-actions"><DashboardClock /><span className="portal-intro-icon"><LayoutDashboard size={27} /></span></div></div>
       <div className="grid-4" style={{ gap: 14, marginBottom: 20 }}>
-        <StatCard icon={Users} label="Total Siswa" value={db.students.length} sub={`${db.classes.length} kelas`} />
+        <StatCard icon={Users} label="Siswa Peserta Tahfidz" value={db.students.length} sub={`${db.classes.length} kelas · ${db.excludedStudentCount || 0} non-Muslim tidak ikut · ${db.unknownReligionCount || 0} belum diverifikasi`} />
         <StatCard icon={GraduationCap} label="Pengajar & Mentor" value={db.teachers.length + db.mentors.length} sub={`${db.teachers.length} pengajar, ${db.mentors.length} mentor`} accent="gold" />
         <StatCard icon={CalendarCheck} label="Kehadiran Bulan Ini" value={`${attendancePct(monthAtt)}%`} sub={`${monthAtt.length} catatan presensi`} />
         <StatCard icon={BookOpen} label="Setoran Bulan Ini" value={monthScores.length} sub={`Rata-rata nilai ${avg(monthScores.map((s) => s.nilai))}`} accent="gold" />
       </div>
       <div className="grid-2" style={{ gap: 14, marginBottom: 14 }}>
-        <div className="t-card" style={{ padding: 18 }}>
-          <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>Rata-rata Nilai per Pengajar</div>
-          <ResponsiveContainer width="100%" height={220}>
-            <BarChart data={perTeacher}>
-              <CartesianGrid stroke="#E4DCC9" vertical={false} />
-              <XAxis dataKey="nama" tick={{ fontSize: 11 }} stroke="#8A8064" interval={0} angle={-15} textAnchor="end" height={50} />
-              <YAxis domain={[0, 100]} tick={{ fontSize: 12 }} stroke="#8A8064" />
-              <Tooltip />
-              <Bar dataKey="rataNilai" fill="#B08D57" radius={[6, 6, 0, 0]} />
-            </BarChart>
-          </ResponsiveContainer>
+        <div className="t-card saqu-teacher-chart" style={{ padding: 20, alignSelf: "start" }}>
+          <h3>Rata-rata Nilai per Pengajar</h3>
+          <p className="saqu-chart-caption">Nilai siswa binaan bulan ini · skala 0–100</p>
+          <div className="saqu-chart-rows">
+            {perTeacher.filter(t => t.jumlah > 0).sort((a,b) => b.rataNilai - a.rataNilai || a.nama.localeCompare(b.nama, "id")).map(t => (
+              <div className="saqu-chart-row" key={t.id}>
+                <div className="saqu-chart-label"><span>{t.nama}</span><strong>{Number(t.rataNilai).toLocaleString("id-ID", {maximumFractionDigits:1})}</strong></div>
+                <div className="saqu-chart-track" aria-hidden="true"><div style={{width:`${Math.min(100,Math.max(0,t.rataNilai))}%`}} /></div>
+                <small>{t.jumlah} penilaian</small>
+              </div>
+            ))}
+            {!perTeacher.some(t => t.jumlah > 0) && <p className="saqu-chart-caption">Belum ada penilaian pada bulan ini.</p>}
+          </div>
+          {perTeacher.some(t => !t.jumlah) && <details className="saqu-chart-pending"><summary>Belum ada penilaian ({perTeacher.filter(t => !t.jumlah).length} pengajar)</summary><ul>{perTeacher.filter(t => !t.jumlah).sort((a,b)=>a.nama.localeCompare(b.nama,"id")).map(t=><li key={t.id}>{t.nama}</li>)}</ul></details>}
         </div>
         <div className="t-card" style={{ padding: 18 }}>
           <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>Setoran Terbaru</div>
@@ -1063,7 +1120,7 @@ function DashboardAdmin({ db }) {
             {recent.map((s) => (
               <div key={s.id} style={{ display: "flex", justifyContent: "space-between", fontSize: 13, borderBottom: "1px solid var(--line)", paddingBottom: 8 }}>
                 <div>
-                  <div style={{ fontWeight: 600 }}>{studentName(db, s.studentId)}</div>
+                  <div style={{ fontWeight: 600 }}>{studentName(db, s.studentId)}</div><div className="student-class-label">{className(db, db.students.find(m => m.id === s.studentId)?.kelasId)}</div>
                   <div style={{ color: "#8A8064", fontSize: 11.5 }}>{surahName(db, s.surahId)} · {fmtDate(s.tanggal)}</div>
                 </div>
                 <div className="font-mono" style={{ fontWeight: 700, color: "var(--teal)" }}>{s.nilaiHuruf || s.nilai}</div>
@@ -1072,20 +1129,20 @@ function DashboardAdmin({ db }) {
           </div>
         </div>
       </div>
-      <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 14 }}>
+      <div className="grid-2" style={{ gap: 14 }}>
         <div className="t-card" style={{ padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontWeight: 700, fontSize: 14 }}>
             <AlertTriangle size={16} color="var(--red)" /> Perlu Perhatian
           </div>
           <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 12 }}>Kehadiran rendah atau lama tidak setor bulan ini</div>
-          <AlertList alerts={alerts} />
+          <AlertList alerts={alerts} db={db} />
         </div>
         <div className="t-card" style={{ padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontWeight: 700, fontSize: 14 }}>
             <Trophy size={16} color="var(--gold)" /> Papan Peringkat Setoran
           </div>
           <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 12 }}>Siswa paling rajin setor bulan ini, seluruh sekolah</div>
-          <Leaderboard rows={leaderboard} />
+          <Leaderboard rows={leaderboard} db={db} />
         </div>
       </div>
     </div>
@@ -1093,9 +1150,12 @@ function DashboardAdmin({ db }) {
 }
 
 function DashboardPengajar({ db, user }) {
-  const teacher = db.teachers.find((t) => t.id === user.refId);
-  const classes = teacherClasses(db, teacher.id);
-  const members = teacherStudents(db, teacher.id);
+  const classes = teacherClasses(db, user.refId);
+  const members = teacherStudents(db, user.refId);
+  const [binaanClass, setBinaanClass] = useState("all");
+  const validBinaanClass = classes.some(c => c.id === binaanClass) ? binaanClass : "all";
+  const visibleMembers = members.filter(m => validBinaanClass === "all" || m.kelasId === validBinaanClass)
+    .sort((a,b) => a.nama.localeCompare(b.nama,"id"));
   const mk = currentMonthKey();
   const memberIds = members.map((m) => m.id);
   const monthScores = db.scores.filter((s) => monthKey(s.tanggal) === mk && memberIds.includes(s.studentId));
@@ -1105,10 +1165,11 @@ function DashboardPengajar({ db, user }) {
 
   return (
     <div>
-      <SectionTitle sub={`${classListLabel(classes)} · ${members.length} siswa binaan`}>Dashboard Pengajar</SectionTitle>
+      <div className="portal-intro dashboard-intro"><div><small>Dashboard pengajar</small><h2>Selamat datang, {user.nama}</h2><p>{classListLabel(classes)} · {members.length} siswa binaan</p></div><div className="dashboard-intro-actions"><DashboardClock /><span className="portal-intro-icon"><BookOpen size={27} /></span></div></div>
+      <TeacherAttendanceDashboard user={user} />
       <div className="grid-3" style={{ gap: 14, marginBottom: 20 }}>
         <StatCard icon={Users} label="Siswa Diampu" value={members.length} sub={classListLabel(classes)} />
-        <StatCard icon={CalendarCheck} label="Presensi Hari Ini" value={`${todayAtt.filter((a) => a.status === "HADIR").length}/${members.length}`} sub="Hadir hari ini" accent="gold" />
+        <StatCard icon={CalendarCheck} label="Presensi Siswa Hari Ini" value={`${todayAtt.filter((a) => a.status === "HADIR").length}/${members.length}`} sub="Hadir hari ini" accent="gold" />
         <StatCard icon={BookOpen} label="Setoran Bulan Ini" value={monthScores.length} sub={`Rata-rata nilai ${avg(monthScores.map((s) => s.nilai))}`} />
       </div>
       <div className="grid-2" style={{ gap: 14, marginBottom: 14 }}>
@@ -1117,22 +1178,31 @@ function DashboardPengajar({ db, user }) {
             <AlertTriangle size={16} color="var(--red)" /> Perlu Perhatian
           </div>
           <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 12 }}>Kehadiran rendah atau lama tidak setor bulan ini</div>
-          <AlertList alerts={alerts} />
+          <AlertList alerts={alerts} db={db} classes={classes} />
         </div>
         <div className="t-card" style={{ padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontWeight: 700, fontSize: 14 }}>
             <Trophy size={16} color="var(--gold)" /> Papan Peringkat Setoran
           </div>
           <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 12 }}>Siswa paling rajin setor bulan ini</div>
-          <Leaderboard rows={leaderboard} />
+          <Leaderboard rows={leaderboard} db={db} />
         </div>
       </div>
       <div className="t-card" style={{ padding: 18 }}>
-        <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>Siswa Binaan</div>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"end",gap:12,flexWrap:"wrap",marginBottom:14}}>
+          <div><h3 style={{margin:"0 0 6px",fontSize:14}}>Siswa Binaan</h3><span role="status" style={{fontSize:12,color:"#64786e"}}>{visibleMembers.length} siswa ditampilkan</span></div>
+          <label style={{display:"grid",gap:6,fontSize:12}}>Kelas siswa binaan
+            <select className="t-select" style={{width:240,maxWidth:"100%"}} value={validBinaanClass} onChange={e => setBinaanClass(e.target.value)}>
+              <option value="all">Semua kelas ({members.length} siswa)</option>
+              {[...classes].sort((a,b) => a.nama.localeCompare(b.nama,"id",{numeric:true})).map(c => <option key={c.id} value={c.id}>{c.nama} ({members.filter(m => m.kelasId === c.id).length} siswa)</option>)}
+            </select>
+          </label>
+        </div>
+        <div style={{overflowX:"auto"}}>
         <table className="t-table">
           <thead><tr><th>Nama</th><th>Kelas</th><th>Setoran Bulan Ini</th><th>Rata-rata Nilai</th></tr></thead>
           <tbody>
-            {members.map((m) => {
+            {visibleMembers.map((m) => {
               const sc = studentScores(db, m.id).filter((s) => monthKey(s.tanggal) === mk);
               return (
                 <tr key={m.id}>
@@ -1143,8 +1213,9 @@ function DashboardPengajar({ db, user }) {
                 </tr>
               );
             })}
+          {!visibleMembers.length && <tr><td colSpan={4}><Empty text="Belum ada siswa peserta Tahfidz pada kelas ini." /></td></tr>}
           </tbody>
-        </table>
+        </table></div>
       </div>
     </div>
   );
@@ -1161,7 +1232,7 @@ function DashboardMentor({ db, user }) {
 
   return (
     <div>
-      <SectionTitle sub={`${students.length} siswa menjadi tanggung jawab Anda`}>Dashboard Mentor</SectionTitle>
+      <div className="dashboard-section-heading"><SectionTitle sub={`${students.length} siswa menjadi tanggung jawab Anda`}>Dashboard Mentor</SectionTitle><DashboardClock /></div>
       <div className="grid-3" style={{ gap: 14, marginBottom: 20 }}>
         <StatCard icon={Users} label="Siswa Binaan" value={students.length} />
         <StatCard icon={BookOpen} label="Penilaian Bulan Ini" value={monthScores.length} accent="gold" />
@@ -1173,14 +1244,14 @@ function DashboardMentor({ db, user }) {
             <AlertTriangle size={16} color="var(--red)" /> Perlu Perhatian
           </div>
           <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 12 }}>Kehadiran rendah atau lama tidak setor bulan ini</div>
-          <AlertList alerts={alerts} />
+          <AlertList alerts={alerts} db={db} />
         </div>
         <div className="t-card" style={{ padding: 18 }}>
           <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 4, fontWeight: 700, fontSize: 14 }}>
             <Trophy size={16} color="var(--gold)" /> Papan Peringkat Setoran
           </div>
           <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 12 }}>Siswa binaan paling rajin setor bulan ini</div>
-          <Leaderboard rows={leaderboard} />
+          <Leaderboard rows={leaderboard} db={db} />
         </div>
       </div>
       <div className="t-card" style={{ padding: 18 }}>
@@ -1207,6 +1278,7 @@ function DashboardMentor({ db, user }) {
 
 function DashboardSiswa({ db, user }) {
   const student = db.students.find((s) => s.id === user.refId);
+  if (!student) return <Empty text="Akun ini tidak termasuk peserta Tahfidz atau data siswa belum terhubung. Hubungi admin bila perlu diperiksa." />;
   const scores = studentScores(db, student.id);
   const attendance = studentAttendance(db, student.id);
   const mk = currentMonthKey();
@@ -1216,7 +1288,7 @@ function DashboardSiswa({ db, user }) {
 
   return (
     <div>
-      <SectionTitle sub={className(db, student.kelasId)}>Assalamu'alaikum, {student.nama.split(" ")[0]}</SectionTitle>
+      <div className="dashboard-section-heading"><SectionTitle sub={className(db, student.kelasId)}>Assalamu'alaikum, {student.nama.split(" ")[0]}</SectionTitle><DashboardClock /></div>
       <div className="grid-3" style={{ gap: 14, marginBottom: 20 }}>
         <StatCard icon={BookOpen} label="Total Setoran" value={scores.length} sub={`${monthScores.length} bulan ini`} />
         <StatCard icon={Star} label="Rata-rata Nilai" value={avg(scores.map((s) => s.nilai)) || "-"} accent="gold" />
@@ -1228,9 +1300,9 @@ function DashboardSiswa({ db, user }) {
           {chartData.length ? (
             <ResponsiveContainer width="100%" height={200}>
               <LineChart data={chartData}>
-                <CartesianGrid stroke="#E4DCC9" vertical={false} />
-                <XAxis dataKey="tanggal" tick={{ fontSize: 11 }} stroke="#8A8064" />
-                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#8A8064" />
+                <CartesianGrid stroke="#e4e4e7" vertical={false} />
+                <XAxis dataKey="tanggal" tick={{ fontSize: 11 }} stroke="#71717a" />
+                <YAxis domain={[0, 100]} tick={{ fontSize: 11 }} stroke="#71717a" />
                 <Tooltip />
                 <Line type="monotone" dataKey="nilai" stroke="#2F6F63" strokeWidth={2.5} dot={{ r: 3 }} />
               </LineChart>
@@ -1249,14 +1321,16 @@ function DashboardSiswa({ db, user }) {
 
 /* ============================== PRESENSI HARIAN ============================== */
 function PresensiHarian({ db, refresh, user }) {
-  const teacher = db.teachers.find((t) => t.id === user.refId);
-  const availableClasses = teacherClasses(db, teacher.id);
-  const members = teacherStudents(db, teacher.id);
+  const availableClasses = teacherClasses(db, user.refId);
+  const members = teacherStudents(db, user.refId);
   const [kelasFilter, setKelasFilter] = useState("all");
-  const visibleMembers = kelasFilter === "all" ? members : members.filter((m) => m.kelasId === kelasFilter);
+  const visibleMembers = members
+    .filter(m => kelasFilter === "all" || m.kelasId === kelasFilter)
+    .sort((a,b) => (a.nama || "").trim().localeCompare((b.nama || "").trim(), "id", {sensitivity:"base", numeric:true}));
   const [tanggal, setTanggal] = useState(isoDaysAgo(0));
   const [draft, setDraft] = useState({});
   const [saved, setSaved] = useState(false);
+  const [saveMessage, setSaveMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
   useEffect(() => {
@@ -1266,21 +1340,23 @@ function PresensiHarian({ db, refresh, user }) {
       map[m.id] = existing?.status || null;
     });
     setDraft(map);
-    setSaved(false);
+    setSaved(false); setSaveMessage("");
     // eslint-disable-next-line
   }, [tanggal]);
 
   function setStatus(studentId, status) {
     setDraft((d) => ({ ...d, [studentId]: status }));
-    setSaved(false);
+    setSaved(false); setSaveMessage("");
   }
   function hadirSemua() {
     const map = { ...draft };
     visibleMembers.forEach((m) => { map[m.id] = draft[m.id] || "HADIR"; });
     setDraft(map);
-    setSaved(false);
+    setSaved(false); setSaveMessage("");
   }
   async function simpan() {
+    if (saving) return;
+    setSaved(false); setSaveMessage("");
     const newRecords = members.filter((m) => draft[m.id]).map((m) => ({
       studentId: m.id,
       tanggal,
@@ -1288,29 +1364,34 @@ function PresensiHarian({ db, refresh, user }) {
       note: "",
       inputBy: user.id,
     }));
-    if (!newRecords.length) return;
+    if (!newRecords.length) {setSaveMessage("Belum ada presensi yang dipilih. Tandai minimal satu siswa, lalu simpan."); return;}
     setSaving(true);
     try {
-      await saveAttendanceBatch(newRecords);
-      await refresh();
+      const result = await saveAttendanceBatch(newRecords);
+      const notice = result.savedCount
+        ? `${result.savedCount} presensi berhasil tersimpan untuk ${fmtDate(tanggal)}.`
+        : "Tidak ada presensi yang disimpan karena siswa yang dipilih bukan peserta Tahfidz.";
+      const excluded = result.excludedCount ? ` ${result.excludedCount} siswa non-Muslim tidak disertakan.` : "";
       setSaved(true);
+      setSaveMessage(notice + excluded);
+      try { await refresh({attendanceFor:{studentIds:members.map((member) => member.id), date:tanggal}}); } catch { setSaveMessage(notice + excluded + " Tampilan gagal diperbarui. Muat ulang halaman."); }
     } catch (e) {
-      alert("Gagal menyimpan presensi: " + e.message);
+      setSaveMessage("Gagal menyimpan presensi: " + e.message);
     }
     setSaving(false);
   }
 
   return (
-    <div>
+    <div className="student-presensi">
       <SectionTitle sub={`${classListLabel(availableClasses)} · tandai kehadiran lalu simpan`}>Presensi Harian</SectionTitle>
       {members.length === 0 && (
         <div className="t-card-soft" style={{ padding: 16, marginBottom: 16, fontSize: 13 }}>
-          Belum ada kelas yang ditugaskan ke Anda. Hubungi Admin untuk menugaskan kelas lewat Master Data.
+          Belum ada siswa pada kelas yang Anda ampu. Minta Admin memeriksa penugasan kelas dan penempatan siswa di Master Data.
         </div>
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input type="date" className="t-input" style={{ width: 180 }} value={tanggal} max={isoDaysAgo(0)} onChange={(e) => setTanggal(e.target.value)} />
+          <input type="date" className="t-input" style={{ width: 180 }} disabled={saving} value={tanggal} max={isoDaysAgo(0)} onChange={(e) => setTanggal(e.target.value)} />
           {availableClasses.length > 1 && (
             <select className="t-select" style={{ width: 200 }} value={kelasFilter} onChange={(e) => setKelasFilter(e.target.value)}>
               <option value="all">Semua Kelas ({members.length} siswa)</option>
@@ -1321,15 +1402,15 @@ function PresensiHarian({ db, refresh, user }) {
             </select>
           )}
         </div>
-        <div style={{ display: "flex", gap: 8 }}>
-          <button className="t-btn t-btn-ghost" onClick={hadirSemua}>Tandai Hadir Semua{kelasFilter !== "all" ? " (Kelas Ini)" : ""}</button>
-          <button className="t-btn t-btn-primary" onClick={simpan} disabled={saving}>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button className="t-btn t-btn-ghost" disabled={saving} onClick={hadirSemua}>Tandai Hadir Semua{kelasFilter !== "all" ? " (Kelas Ini)" : ""}</button>
+          <button className="t-btn t-btn-primary" onClick={simpan} disabled={saving || !members.length}>
             {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} {saving ? "Menyimpan..." : "Simpan Presensi"}
           </button>
         </div>
       </div>
-      {saved && <div className="t-card-soft" style={{ padding: "8px 14px", marginBottom: 14, fontSize: 13, color: "var(--teal)", fontWeight: 600 }}>Presensi tersimpan.</div>}
-      <div className="t-card" style={{ padding: 8 }}>
+      {saveMessage && <div className={`save-feedback ${saved ? "success" : "error"}`} role={saved ? "status" : "alert"}>{saveMessage}</div>}
+      <div className="t-card" style={{ padding: 8, overflowX: "auto" }}>
         <table className="t-table">
           <thead><tr><th>Siswa</th><th>Kelas</th><th style={{ width: 320 }}>Status</th></tr></thead>
           <tbody>
@@ -1343,7 +1424,7 @@ function PresensiHarian({ db, refresh, user }) {
                       <button
                         key={key}
                         className={`t-status-btn ${draft[m.id] === key ? "selected-" + key : ""}`}
-                        onClick={() => setStatus(m.id, key)}
+                        disabled={saving} onClick={() => setStatus(m.id, key)}
                       >
                         <meta.icon size={15} /> {meta.label}
                       </button>
@@ -1363,7 +1444,7 @@ function PresensiHarian({ db, refresh, user }) {
 function PenilaianTahfidz({ db, refresh, user }) {
   const isMentor = user.role === "mentor";
   const scopeStudents = isMentor
-    ? mentorStudents(db, db.mentors.find((m) => m.id === user.refId).id)
+    ? mentorStudents(db, user.refId)
     : teacherStudents(db, user.refId);
 
   const availableClasses = db.classes.filter((c) => scopeStudents.some((s) => s.kelasId === c.id));
@@ -1371,10 +1452,10 @@ function PenilaianTahfidz({ db, refresh, user }) {
   const filteredStudents = kelasFilter === "all" ? scopeStudents : scopeStudents.filter((s) => s.kelasId === kelasFilter);
 
   const [studentId, setStudentId] = useState(filteredStudents[0]?.id || "");
-  const availableJuz = [...new Set(db.surahs.map((s) => s.juz).filter(Boolean))].sort((a, b) => a - b);
+  const availableJuz = [...new Set(db.surahs.map((s) => Number(s.juz)).filter(n => Number.isInteger(n) && n >= 1 && n <= 30))].sort((a, b) => a - b);
   const [juzFilter, setJuzFilter] = useState(availableJuz[0] || 30);
-  const surahsInJuz = db.surahs.filter((s) => s.juz === juzFilter);
-  const [surahId, setSurahId] = useState(surahsInJuz[0]?.id || db.surahs[0]?.id || "");
+  const surahsInJuz = surahsForJuz(db.surahs, juzFilter);
+  const [surahId, setSurahId] = useState(surahsInJuz[0]?.id || sortSurahs(db.surahs)[0]?.id || "");
   const [ayatMulai, setAyatMulai] = useState(1);
   const [ayatAkhir, setAyatAkhir] = useState(1);
   const [nilaiHuruf, setNilaiHuruf] = useState("A");
@@ -1382,6 +1463,8 @@ function PenilaianTahfidz({ db, refresh, user }) {
   const [tanggal, setTanggal] = useState(isoDaysAgo(0));
   const [msg, setMsg] = useState("");
   const [saving, setSaving] = useState(false);
+  const [templateBusy, setTemplateBusy] = useState(false);
+  const [templateMsg, setTemplateMsg] = useState("");
 
   function handleKelasFilter(val) {
     setKelasFilter(val);
@@ -1391,7 +1474,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
   function handleJuzFilter(val) {
     const juzNum = Number(val);
     setJuzFilter(juzNum);
-    const list = db.surahs.filter((s) => s.juz === juzNum);
+    const list = surahsForJuz(db.surahs, juzNum);
     setSurahId(list[0]?.id || "");
     setAyatMulai(1); setAyatAkhir(1);
   }
@@ -1399,10 +1482,19 @@ function PenilaianTahfidz({ db, refresh, user }) {
   const surah = db.surahs.find((s) => s.id === surahId);
 
   async function submit() {
+    if (saving) return;
+    setMsg("");
     if (!studentId) { setMsg("Pilih siswa terlebih dahulu."); return; }
+    if (!filteredStudents.some((s) => s.id === studentId)) {
+      setMsg("Siswa tidak termasuk dalam pilihan kelas Anda. Pilih ulang kelas dan siswa.");
+      return;
+    }
     if (!surah) { setMsg("Pilih surat terlebih dahulu."); return; }
-    if (ayatAkhir < ayatMulai) { setMsg("Ayat akhir tidak boleh lebih kecil dari ayat mulai."); return; }
-    if (ayatAkhir > surah.ayat) { setMsg(`Surat ${surah.nama} hanya memiliki ${surah.ayat} ayat.`); return; }
+    if (!Number.isInteger(Number(ayatMulai)) || !Number.isInteger(Number(ayatAkhir)) || Number(ayatMulai) < 1) {
+      setMsg("Nomor ayat harus berupa bilangan bulat mulai dari 1."); return;
+    }
+    if (Number(ayatAkhir) < Number(ayatMulai)) { setMsg("Ayat akhir tidak boleh lebih kecil dari ayat mulai."); return; }
+    if (Number(ayatAkhir) > Number(surah.ayat)) { setMsg(`Surat ${surah.nama} hanya memiliki ${surah.ayat} ayat.`); return; }
     const entry = {
       studentId, tanggal, surahId, ayatMulai: Number(ayatMulai), ayatAkhir: Number(ayatAkhir),
       nilaiHuruf, catatan: catatan.trim(), penguji: user.nama, inputBy: user.id,
@@ -1410,14 +1502,120 @@ function PenilaianTahfidz({ db, refresh, user }) {
     setSaving(true);
     try {
       await insertScore(entry);
-      await refresh();
-      setMsg("Penilaian tersimpan.");
+      setMsg(`Penilaian ${filteredStudents.find(s => s.id === studentId)?.nama || "siswa"} berhasil tersimpan untuk ${fmtDate(tanggal)}.`);
+      try { await refresh({scoresFor:entry.studentId}); } catch { setMsg("Penilaian sudah tersimpan, tetapi tampilan gagal diperbarui. Muat ulang halaman; tidak perlu menyimpan ulang."); }
       setCatatan("");
-      setTimeout(() => setMsg(""), 2500);
+
     } catch (e) {
       setMsg("Gagal menyimpan: " + e.message);
     }
     setSaving(false);
+  }
+
+  const templateStudents = kelasFilter === "all" ? scopeStudents : filteredStudents;
+  async function downloadAssessmentTemplate() {
+    if (!templateStudents.length) { setTemplateMsg("Belum ada siswa pada kelas yang dipilih."); return; }
+    setTemplateBusy(true); setTemplateMsg("");
+    try {
+      const XLSX = await loadXlsx();
+    const data = templateStudents.map((student) => ({
+      NIS: student.nis || "", "Nama Siswa": student.nama, Kelas: className(db, student.kelasId),
+      Tanggal: tanggal, Surat: "", "Ayat Mulai": "", "Ayat Akhir": "", Nilai: "",
+      Catatan: "", Penguji: user.nama,
+    }));
+    const sheet = XLSX.utils.json_to_sheet(data);
+    sheet["!cols"] = [{wch:18},{wch:30},{wch:18},{wch:14},{wch:16},{wch:14},{wch:14},{wch:10},{wch:35},{wch:24}];
+    const book = XLSX.utils.book_new();
+    XLSX.utils.book_append_sheet(book, sheet, "Template Penilaian");
+    const guide = XLSX.utils.aoa_to_sheet([
+      ["Petunjuk Template Penilaian SAQUIN"],
+      ["Kelas", className(db, templateStudents[0]?.kelasId)],
+      ["Wajib diisi", "Tanggal, Surat, Ayat Mulai, Ayat Akhir, Nilai"],
+      ["Format tanggal", "YYYY-MM-DD (contoh: 2026-10-12)"],
+      ["Surat", "Boleh nomor surat (1–114) atau nama surat"],
+      ["Nilai", "A+, A, B+, B, atau C"],
+      ["Baris kosong", "Baris siswa yang belum diisi boleh dibiarkan; akan dilewati saat impor"],
+    ]);
+    guide["!cols"] = [{wch:22},{wch:78}];
+    XLSX.utils.book_append_sheet(book, guide, "Petunjuk");
+    XLSX.writeFile(book, `Template_Penilaian_${safeExportName(className(db, templateStudents[0]?.kelasId))}.xlsx`);
+    setTemplateMsg("Template berhasil diunduh. Isi kolom Surat, ayat, Nilai, dan Tanggal sebelum diunggah kembali.");
+    } catch (error) {
+      setTemplateMsg("Template gagal dibuat: " + error.message);
+    } finally {
+      setTemplateBusy(false);
+    }
+  }
+  function parseTemplateDate(value, XLSX) {
+    if (typeof value === "number") {
+      const parsed = XLSX.SSF.parse_date_code(value);
+      if (parsed) return `${parsed.y}-${String(parsed.m).padStart(2,"0")}-${String(parsed.d).padStart(2,"0")}`;
+    }
+    const text = String(value || "").trim();
+    if (/^\d{4}-\d{2}-\d{2}$/.test(text)) return text;
+    const match = text.match(/^(\d{1,2})[\/-](\d{1,2})[\/-](\d{4})$/);
+    return match ? `${match[3]}-${String(match[2]).padStart(2,"0")}-${String(match[1]).padStart(2,"0")}` : "";
+  }
+  function resolveTemplateSurah(value) {
+    const raw = String(value ?? "").trim();
+    if (!raw) return null;
+    const numeric = Number(raw.match(/^\d+/)?.[0] || raw);
+    if (Number.isInteger(numeric) && numeric >= 1 && numeric <= 114) return db.surahs.find((s) => surahNumber(s) === numeric) || null;
+    const normalized = raw.replace(/^\d+\s*[.\-:]?\s*/, "").toLowerCase().replace(/[^a-z0-9]/g, "");
+    return db.surahs.find((s) => String(s.nama).toLowerCase().replace(/[^a-z0-9]/g, "") === normalized) || null;
+  }
+  async function handleAssessmentTemplate(event) {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    if (kelasFilter === "all" && availableClasses.length > 1) {
+      setTemplateMsg("Pilih satu kelas terlebih dahulu agar impor tidak tertukar."); return;
+    }
+    setTemplateBusy(true); setTemplateMsg("");
+    try {
+      const XLSX = await loadXlsx();
+      const workbook = XLSX.read(await file.arrayBuffer(), { type: "array", cellDates: false });
+      const sheet = workbook.Sheets[workbook.SheetNames[0]];
+      const rawRows = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const byNis = new Map(templateStudents.map((s) => [String(s.nis || "").trim(), s]));
+      const byName = new Map(templateStudents.map((s) => [String(s.nama || "").trim().toLowerCase(), s]));
+      const errors = [], entries = [], seen = new Set();
+      rawRows.forEach((row, index) => {
+        const line = index + 2;
+        const nis = String(row.NIS ?? row.nis ?? "").trim();
+        const name = String(row["Nama Siswa"] ?? row.Nama ?? row.nama ?? "").trim();
+        const student = byNis.get(nis) || byName.get(name.toLowerCase());
+        const dateValue = row.Tanggal ?? row.tanggal;
+        const surahValue = row.Surat ?? row["Nama Surat"] ?? row.surah;
+        const startValue = row["Ayat Mulai"] ?? row.ayatMulai;
+        const endValue = row["Ayat Akhir"] ?? row.ayatAkhir;
+        const gradeValue = row.Nilai ?? row["Nilai Huruf"] ?? row.nilai;
+        const noteValue = row.Catatan ?? row.catatan ?? "";
+        if (!nis && !name && !dateValue && !surahValue && !startValue && !endValue && !gradeValue && !noteValue) return;
+        if (!surahValue && !startValue && !endValue && !gradeValue && !noteValue) return;
+        const date = parseTemplateDate(dateValue, XLSX);
+        const surah = resolveTemplateSurah(surahValue);
+        const start = Number(startValue);
+        const end = Number(endValue);
+        const grade = String(gradeValue ?? "").trim().toUpperCase();
+        if (!student) errors.push(`Baris ${line}: siswa dengan NIS/nama tersebut tidak ada di kelas.`);
+        else if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) errors.push(`Baris ${line}: tanggal harus berformat YYYY-MM-DD.`);
+        else if (!surah) errors.push(`Baris ${line}: surat tidak dikenali.`);
+        else if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end > Number(surah.ayat)) errors.push(`Baris ${line}: rentang ayat tidak valid untuk ${surah.nama}.`);
+        else if (!["A+","A","B+","B","C"].includes(grade)) errors.push(`Baris ${line}: nilai harus A+, A, B+, B, atau C.`);
+        else {
+          const key = `${student.id}|${date}|${surah.id}|${start}|${end}`;
+          if (seen.has(key)) errors.push(`Baris ${line}: data penilaian duplikat.`);
+          else { seen.add(key); entries.push({ studentId:student.id, tanggal:date, surahId:surah.id, ayatMulai:start, ayatAkhir:end, nilaiHuruf:grade, catatan:String(noteValue).trim(), penguji:String(row.Penguji ?? row.penguji ?? user.nama).trim() || user.nama, inputBy:user.id }); }
+        }
+      });
+      if (errors.length) throw new Error(errors.slice(0, 8).join(" ") + (errors.length > 8 ? ` Dan ${errors.length - 8} kesalahan lainnya.` : ""));
+      if (!entries.length) throw new Error("Tidak ada baris penilaian yang dapat diimpor.");
+      const result = await bulkInsertScores(entries);
+      await refresh({scoresForMany: [...new Set(entries.map((entry) => entry.studentId))]});
+      setTemplateMsg(`${result.savedCount} penilaian dari template berhasil disimpan.`);
+    } catch (error) { setTemplateMsg("Impor gagal: " + error.message); }
+    finally { setTemplateBusy(false); }
   }
 
   const history = studentScores(db, studentId).slice(0, 6);
@@ -1464,7 +1662,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>5. Nama Surat</label>
               <select className="t-select" value={surahId} onChange={(e) => { setSurahId(e.target.value); setAyatMulai(1); setAyatAkhir(1); }}>
-                {surahsInJuz.map((s) => <option key={s.id} value={s.id}>{s.nama} ({s.ayat} ayat)</option>)}
+                {surahsInJuz.map((s) => <option key={s.id} value={s.id}>{surahNumber(s) ? `${surahNumber(s)}. ` : ""}{s.nama} ({s.ayat} ayat)</option>)}
               </select>
             </div>
 
@@ -1497,8 +1695,8 @@ function PenilaianTahfidz({ db, refresh, user }) {
               <textarea className="t-input" style={{ minHeight: 60, resize: "vertical", fontFamily: "inherit" }} value={catatan} onChange={(e) => setCatatan(e.target.value)} placeholder="Opsional" />
             </div>
 
-            {msg && <div style={{ fontSize: 12.5, color: msg.includes("tersimpan") ? "var(--teal)" : "var(--red)", fontWeight: 600 }}>{msg}</div>}
-            <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={submit} disabled={saving}>
+            {msg && <div className={`save-feedback ${msg.includes("tersimpan") ? "success" : "error"}`} role={msg.includes("tersimpan") ? "status" : "alert"}>{msg}</div>}
+            <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={submit} disabled={saving || !studentId || !filteredStudents.some((s) => s.id === studentId)}>
               {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} {saving ? "Menyimpan..." : "Simpan Penilaian"}
             </button>
           </div>
@@ -1515,11 +1713,24 @@ function PenilaianTahfidz({ db, refresh, user }) {
                     {h.catatan && <div style={{ fontSize: 11.5, color: "#8A8064", fontStyle: "italic", marginTop: 2 }}>&ldquo;{h.catatan}&rdquo;</div>}
                   </div>
                   <div className="font-mono" style={{ fontWeight: 700, color: nilaiColor[h.nilaiHuruf] || "var(--teal)", flexShrink: 0 }}>{h.nilaiHuruf || h.nilai}</div>
+                  <DeleteScoreButton score={h} user={user} db={db} refresh={refresh} />
                 </div>
               ))}
             </div>
           ) : <Empty text="Belum ada riwayat penilaian." />}
         </div>
+      </div>
+      <div className="t-card" style={{ padding: 20, marginTop: 16 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, fontWeight: 700, fontSize: 14, marginBottom: 6 }}><Upload size={16} color="var(--teal)" /> Template Penilaian per Kelas</div>
+        <p style={{ margin: "0 0 12px", fontSize: 12, color: "#64786e" }}>Unduh template berisi daftar siswa kelas yang dipilih, isi data penilaian, lalu unggah kembali. NIS atau nama siswa akan dicocokkan otomatis.</p>
+        <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+          <button type="button" className="t-btn t-btn-ghost" onClick={downloadAssessmentTemplate} disabled={!templateStudents.length}><Download size={14} /> Unduh Template Excel</button>
+          <label className="t-btn t-btn-primary" style={{ cursor: templateBusy ? "not-allowed" : "pointer" }}>
+            {templateBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {templateBusy ? "Mengimpor..." : "Upload Penilaian"}
+            <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleAssessmentTemplate} disabled={templateBusy} />
+          </label>
+        </div>
+        {templateMsg && <p role="status" style={{ margin: "12px 0 0", fontSize: 12, color: templateMsg.startsWith("Impor gagal") ? "var(--red)" : "var(--teal)" }}>{templateMsg}</p>}
       </div>
     </div>
   );
@@ -1527,7 +1738,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
 
 
 /* ============================== REKAP ============================== */
-function RekapView({ db, user }) {
+function RekapView({ db, user, refresh }) {
   let students = [];
   let title = "Rekap Tahfidz";
   let sub = "";
@@ -1545,40 +1756,119 @@ function RekapView({ db, user }) {
     students = db.students.filter((s) => s.id === user.refId);
     sub = "Riwayat pribadi";
   }
-  const [filter, setFilter] = useState(students[0]?.id || "all");
-  const rows = (filter === "all" ? students : students.filter((s) => s.id === filter))
+  const [classFilter, setClassFilter] = useState("all");
+  const [filter, setFilter] = useState("all");
+  const availableClasses = db.classes.filter(c => user.role === "admin" ||
+    (user.role === "pengajar" ? c.teacherId === user.refId : students.some(s => s.kelasId === c.id)))
+    .sort((a,b) => a.nama.localeCompare(b.nama,"id",{numeric:true}));
+  const validClass = availableClasses.some(c => c.id === classFilter) ? classFilter : "all";
+  const filteredStudents = students.filter(s => validClass === "all" || s.kelasId === validClass)
+    .sort((a,b) => a.nama.localeCompare(b.nama,"id"));
+  const validStudent = filteredStudents.some(s => s.id === filter) ? filter : "all";
+  const [period, setPeriod] = useState(currentMonthKey());
+  const [exporting, setExporting] = useState(false);
+  const [exportError, setExportError] = useState("");
+  const rows = (validStudent === "all" ? filteredStudents : filteredStudents.filter((s) => s.id === validStudent))
     .flatMap((s) => studentScores(db, s.id).map((sc) => ({ ...sc, _nama: s.nama })))
+    .filter((r) => !period || monthKey(r.tanggal) === period)
+    .sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
+  const attendanceRows = (validStudent === "all" ? filteredStudents : filteredStudents.filter((s) => s.id === validStudent))
+    .flatMap((s) => studentAttendance(db, s.id).map((att) => ({ ...att, _nama: s.nama, _kelas: className(db, s.kelasId) })))
+    .filter((r) => !period || monthKey(r.tanggal) === period)
     .sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
 
+  function exportRows() {
+    return rows.map((r) => ({Siswa:r._nama, Kelas:className(db, db.students.find((s) => s.id === r.studentId)?.kelasId),
+      Tanggal:r.tanggal, Surat:surahName(db,r.surahId), Ayat:`${r.ayatMulai}-${r.ayatAkhir}`,
+      Nilai:r.nilaiHuruf || r.nilai, Penguji:r.penguji || "-", Catatan:r.catatan || ""}));
+  }
+  function exportAttendanceRows() {
+    return attendanceRows.map((r) => ({Siswa:r._nama, Kelas:r._kelas, Tanggal:r.tanggal, Status:STATUS_META[r.status]?.label || r.status, Catatan:r.note || ""}));
+  }
+  async function exportRecap(format) {
+    setExporting(true); setExportError("");
+    try {
+      const data = exportRows();
+      if (format === "xlsx") {
+        const XLSX = await loadXlsx();
+        const sheet = XLSX.utils.json_to_sheet(data);
+        sheet["!cols"] = [{wch:32},{wch:14},{wch:14},{wch:22},{wch:12},{wch:8},{wch:28},{wch:45}];
+        const attendanceSheet = XLSX.utils.json_to_sheet(exportAttendanceRows());
+        attendanceSheet["!cols"] = [{wch:32},{wch:18},{wch:14},{wch:14},{wch:40}];
+        const summarySheet = XLSX.utils.json_to_sheet([
+          { Keterangan: "Kelas", Nilai: validClass === "all" ? "Semua kelas" : className(db, validClass) },
+          { Keterangan: "Periode", Nilai: period ? monthLabel(period) : "Semua periode" },
+          { Keterangan: "Jumlah penilaian", Nilai: data.length },
+          { Keterangan: "Jumlah catatan kehadiran", Nilai: attendanceRows.length },
+          { Keterangan: "Hadir", Nilai: attendanceRows.filter((r) => r.status === "HADIR").length },
+          { Keterangan: "Sakit", Nilai: attendanceRows.filter((r) => r.status === "SAKIT").length },
+          { Keterangan: "Izin", Nilai: attendanceRows.filter((r) => r.status === "IZIN").length },
+          { Keterangan: "Alpha", Nilai: attendanceRows.filter((r) => r.status === "ALPHA").length },
+        ]);
+        const book = XLSX.utils.book_new();
+        XLSX.utils.book_append_sheet(book, summarySheet, "Ringkasan");
+        XLSX.utils.book_append_sheet(book, sheet, "Rekap Penilaian");
+        XLSX.utils.book_append_sheet(book, attendanceSheet, "Rekap Kehadiran");
+        XLSX.writeFile(book, `Rekap_Kelas_${safeExportName(validClass === "all" ? "semua_kelas" : className(db, validClass))}_${period || "semua_periode"}.xlsx`);
+      } else {
+        const { downloadRecapPdf } = await import("./pdfExports.js");
+        await downloadRecapPdf(data, period ? monthLabel(period) : "Semua periode");
+      }
+    } catch (error) { setExportError(error.message); }
+    finally { setExporting(false); }
+  }
   return (
     <div>
-      <SectionTitle sub={sub}>{title}</SectionTitle>
-      {students.length > 1 && (
-        <select className="t-select" style={{ width: 240, marginBottom: 14 }} value={filter} onChange={(e) => setFilter(e.target.value)}>
-          <option value="all">Semua siswa</option>
-          {students.map((s) => <option key={s.id} value={s.id}>{s.nama}</option>)}
-        </select>
-      )}
-      <div className="t-card" style={{ padding: 8 }}>
+       <SectionTitle sub={sub}>Rekap Kelas Bulanan</SectionTitle>
+      <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+         <label>Bulan rekap<input className="t-input" type="month" value={period} onChange={(e) => setPeriod(e.target.value)} /></label>
+        <button className="t-btn t-btn-ghost" onClick={() => setPeriod("")}>Semua periode</button>
+         <button className="t-btn t-btn-primary" disabled={exporting || (!rows.length && !attendanceRows.length)} onClick={() => exportRecap("xlsx")}><Download size={14} /> Unduh Excel (2 Rekap)</button>
+         <button className="t-btn t-btn-ghost" disabled={exporting || !rows.length} onClick={() => exportRecap("pdf")}><Download size={14} /> Unduh PDF Penilaian</button>
+      </div>
+      {exportError && <p role="alert" style={{color:"var(--red)"}}>{exportError}</p>}
+      <div style={{display:"flex",gap:12,flexWrap:"wrap",marginBottom:16}}>
+        <label style={{display:"grid",gap:6,fontSize:12}}>Kelas rekap
+          <select className="t-select" style={{width:240,maxWidth:"100%"}} value={validClass} onChange={e => {setClassFilter(e.target.value);setFilter("all");setExportError("");}}>
+            <option value="all">Semua kelas</option>
+            {availableClasses.map(c => <option key={c.id} value={c.id}>{c.nama}</option>)}
+          </select>
+        </label>
+        <label style={{display:"grid",gap:6,fontSize:12}}>Nama siswa rekap
+          <select className="t-select" style={{width:280,maxWidth:"100%"}} value={validStudent} disabled={!filteredStudents.length} onChange={e => {setFilter(e.target.value);setExportError("");}}>
+            <option value="all">{filteredStudents.length ? `Semua siswa (${filteredStudents.length})` : "Belum ada siswa"}</option>
+            {filteredStudents.map(s => <option key={s.id} value={s.id}>{s.nama}</option>)}
+          </select>
+        </label>
+      </div>
+       <p role="status" style={{fontSize:12,color:"#64786e"}}>{rows.length} penilaian dan {attendanceRows.length} catatan kehadiran sesuai pilihan kelas, siswa, dan periode. Excel berisi ringkasan, penilaian, dan kehadiran.</p>
+       <div className="t-card-soft" style={{padding:14,marginBottom:16}}>
+         <strong>Ringkasan kehadiran {period ? `· ${monthLabel(period)}` : ""}</strong>
+         <span style={{marginLeft:12}}>Hadir {attendanceRows.filter((r) => r.status === "HADIR").length}</span>
+         <span style={{marginLeft:12}}>Sakit {attendanceRows.filter((r) => r.status === "SAKIT").length}</span>
+         <span style={{marginLeft:12}}>Izin {attendanceRows.filter((r) => r.status === "IZIN").length}</span>
+         <span style={{marginLeft:12}}>Alpha {attendanceRows.filter((r) => r.status === "ALPHA").length}</span>
+       </div>
+      <div className="t-card" style={{ padding: 8, overflowX:"auto" }}>
         <table className="t-table">
           <thead>
             <tr>
-              {students.length > 1 && filter === "all" && <th>Siswa</th>}
-              <th>Tanggal</th><th>Surat</th><th>Ayat</th><th>Nilai</th><th>Penguji</th>
+              {validStudent === "all" && <th>Siswa</th>}
+              <th>Kelas</th><th>Tanggal</th><th>Surat</th><th>Ayat</th><th>Nilai</th><th>Penguji</th>{user.role !== "siswa" && <th>Aksi</th>}
             </tr>
           </thead>
           <tbody>
             {rows.length ? rows.map((r) => (
               <tr key={r.id}>
-                {students.length > 1 && filter === "all" && <td style={{ fontWeight: 600 }}>{r._nama}</td>}
-                <td>{fmtDate(r.tanggal)}</td>
+                {validStudent === "all" && <td style={{ fontWeight: 600 }}>{r._nama}</td>}
+                <td>{className(db, db.students.find(s => s.id === r.studentId)?.kelasId)}</td><td>{fmtDate(r.tanggal)}</td>
                 <td>{surahName(db, r.surahId)}</td>
                 <td>{r.ayatMulai}-{r.ayatAkhir}</td>
                 <td className="font-mono" style={{ fontWeight: 700 }}>{r.nilaiHuruf || r.nilai}</td>
-                <td>{r.penguji}</td>
+                <td>{r.penguji}</td>{user.role !== "siswa" && <td><DeleteScoreButton score={r} user={user} db={db} refresh={refresh} /></td>}
               </tr>
             )) : (
-              <tr><td colSpan={6}><Empty text="Belum ada data setoran." /></td></tr>
+              <tr><td colSpan={8}><Empty text="Belum ada data setoran." /></td></tr>
             )}
           </tbody>
         </table>
@@ -1589,6 +1879,7 @@ function RekapView({ db, user }) {
 
 function PresensiSiswa({ db, user }) {
   const student = db.students.find((s) => s.id === user.refId);
+  if (!student) return <Empty text="Akun ini tidak termasuk peserta Tahfidz atau data siswa belum terhubung." />;
   const records = studentAttendance(db, student.id);
   return (
     <div>
@@ -1648,11 +1939,11 @@ function reportNarrative(student, stats, mkLabel) {
   return text;
 }
 
-function ReportSheet({ db, student, mk }) {
+function ReportSheet({ db, student, mk, reportDate }) {
   const stats = reportStats(db, student.id, mk);
   const teacher = db.teachers.find((t) => t.id === classTeacherId(db, student.kelasId));
   const teacherSignature = teacher ? db.profiles.find((p) => p.role === "pengajar" && p.refId === teacher.id)?.signatureUrl : null;
-  const adminSignature = db.profiles.find((p) => p.role === "admin")?.signatureUrl;
+  const adminSignature = resolvePicSignature(db.profiles);
   const stempelUrl = db.schoolSettings?.stempelUrl;
   const kategoriColor = {
     "Sangat Baik": "var(--teal)", "Baik": "var(--teal)", "Cukup": "#7A5E32",
@@ -1724,25 +2015,25 @@ function ReportSheet({ db, student, mk }) {
           </tbody>
         </table>
 
-        <div style={{ textAlign: "right", fontSize: 12.5, marginTop: 24 }}>
-          Malang, {todayLongID()}
-        </div>
-        <div style={{ textAlign: "center", fontSize: 12.5, marginTop: 10 }}>Mengetahui,</div>
-        <div className="report-sig" style={{ marginTop: 8 }}>
+        <div className="report-sig" style={{ marginTop: 24, breakInside: "avoid", alignItems: "start" }}>
           <div>
+            <div style={{height:22}} aria-hidden="true" />
+            <div style={{height:22}}>Mengetahui,</div>
             <div>Pengajar Tahfidz</div>
             {teacherSignature ? (
               <img src={teacherSignature} alt="Tanda tangan pengajar" style={{ height: 44, margin: "8px auto 0", display: "block", objectFit: "contain" }} />
-            ) : <div style={{ height: 44 }} />}
+            ) : <div style={{ height: 44, marginTop: 8 }} />}
             <div className="line">{teacher?.nama || "-"}</div>
           </div>
           <div style={{ position: "relative" }}>
+            <div style={{minHeight:22,whiteSpace:"nowrap",fontSize:12}}>Malang, {longDateID(reportDate)}</div>
+            <div style={{height:22}} aria-hidden="true" />
             <div>PIC Tahfidz</div>
             <div style={{ position: "relative", height: 44, marginTop: 8 }}>
               {adminSignature && <img src={adminSignature} alt="Tanda tangan PIC Tahfidz" style={{ height: 44, margin: "0 auto", display: "block", objectFit: "contain" }} />}
               {stempelUrl && <img src={stempelUrl} alt="Stempel sekolah" style={{ height: 64, position: "absolute", left: "50%", top: "50%", transform: "translate(-70%,-50%) rotate(-8deg)", opacity: 0.9, objectFit: "contain" }} />}
             </div>
-            <div className="line">PIC Tahfidz</div>
+            <div className="line">{PIC_TAHFIDZ}</div>
           </div>
         </div>
       </div>
@@ -1761,35 +2052,80 @@ function ReportBulanan({ db, user }) {
   if (user.role === "mentor") { students = mentorStudents(db, user.refId); sub = "Siswa binaan Anda"; }
 
   const [mk, setMk] = useState(currentMonthKey());
-  const [studentId, setStudentId] = useState(students[0]?.id || "");
-  const months = lastMonthOptions(6);
+  const [classId, setClassId] = useState("");
+  const [studentId, setStudentId] = useState("all");
+  const availableClasses = db.classes.filter(c =>
+    user.role === "admin" || (user.role === "pengajar" && c.teacherId === user.refId) ||
+    (user.role === "mentor" && students.some(s => s.kelasId === c.id))
+  ).sort((a,b) => a.nama.localeCompare(b.nama,"id",{numeric:true}));
+  const validClassId = availableClasses.some(c => c.id === classId) ? classId : "";
+  const classStudents = students.filter(s => validClassId && s.kelasId === validClassId)
+    .sort((a,b) => a.nama.localeCompare(b.nama,"id"));
+  const validStudentId = studentId === "all" || classStudents.some(s => s.id === studentId) ? studentId : "all";
+  const [reportDate, setReportDate] = useState(defaultReportDate(mk));
+  const [dateLoading, setDateLoading] = useState(true);
+  const [dateSaving, setDateSaving] = useState(false);
+  const [dateDirty, setDateDirty] = useState(false);
+  const [dateError, setDateError] = useState("");
+  const [dateMsg, setDateMsg] = useState("");
+  useEffect(() => {
+    let cancelled = false;
+    setDateLoading(true); setDateError(""); setDateMsg(""); setDateDirty(false);
+    fetchReportMonthSettings(mk).then((data) => {
+      if (!cancelled) setReportDate(data?.report_date || defaultReportDate(mk));
+    }).catch((error) => { if (!cancelled) setDateError("Tanggal laporan gagal dimuat: " + error.message); })
+      .finally(() => { if (!cancelled) setDateLoading(false); });
+    return () => { cancelled = true; };
+  }, [mk]);
+  async function saveDate() {
+    setDateSaving(true); setDateError(""); setDateMsg("");
+    try {
+      await saveReportMonthSettings(mk, reportDate);
+      setDateDirty(false); setDateMsg("Tanggal bulan ini tersimpan untuk seluruh laporan siswa.");
+    } catch (error) { setDateError(error.message); }
+    finally { setDateSaving(false); }
+  }
+  function handleDownload() { if (!dateLoading && !dateError && !dateDirty) window.print(); }
 
-  function handleDownload() { window.print(); }
-
-  const selected = studentId === "all" ? students : students.filter((s) => s.id === studentId);
+  const selected = validStudentId === "all" ? classStudents : classStudents.filter((s) => s.id === validStudentId);
 
   return (
     <div>
       <SectionTitle sub={sub}>Report Bulanan</SectionTitle>
-      <div className="no-print" style={{ display: "flex", gap: 10, alignItems: "center", marginBottom: 20, flexWrap: "wrap" }}>
-        <select className="t-select" style={{ width: 220 }} value={studentId} onChange={(e) => setStudentId(e.target.value)}>
-          {students.length > 1 && <option value="all">Semua siswa ({sub})</option>}
-          {students.map((s) => <option key={s.id} value={s.id}>{s.nama}</option>)}
-        </select>
-        <select className="t-select" style={{ width: 180 }} value={mk} onChange={(e) => setMk(e.target.value)}>
-          {months.map((m) => <option key={m} value={m}>{monthLabel(m)}</option>)}
-        </select>
-        <button className="t-btn t-btn-gold" onClick={handleDownload}>
+      <div className="no-print" style={{ display: "flex", gap: 10, alignItems: "end", marginBottom: 20, flexWrap: "wrap" }}>
+        <label style={{display:"grid",gap:6,fontSize:12}}>1. Pilih kelas
+          <select className="t-select" style={{width:240,maxWidth:"100%"}} value={validClassId} onChange={e => {setClassId(e.target.value);setStudentId("all");}}>
+            <option value="">Pilih kelas terlebih dahulu</option>
+            {availableClasses.map(c => <option key={c.id} value={c.id}>{c.nama}</option>)}
+          </select>
+        </label>
+        <label style={{display:"grid",gap:6,fontSize:12}}>2. Pilih nama siswa
+          <select className="t-select" style={{width:280,maxWidth:"100%"}} value={validStudentId} disabled={!validClassId || !classStudents.length} onChange={e => setStudentId(e.target.value)}>
+            <option value="all">{!validClassId ? "Pilih kelas dahulu" : !classStudents.length ? "Belum ada siswa" : `Semua siswa di kelas ini (${classStudents.length})`}</option>
+            {classStudents.map(s => <option key={s.id} value={s.id}>{s.nama}</option>)}
+          </select>
+        </label>
+        <input aria-label="Bulan laporan" type="month" className="t-input" style={{ width: 180 }} value={mk} disabled={dateSaving} onChange={(e) => { if (e.target.value) setMk(e.target.value); }} />
+        <button className="t-btn t-btn-gold" onClick={handleDownload} disabled={dateLoading || dateSaving || !!dateError || dateDirty || !selected.length}>
           <FileText size={15} /> Unduh PDF
         </button>
         <span style={{ fontSize: 11.5, color: "#8A8064" }}>Pada dialog cetak, pilih tujuan &ldquo;Save as PDF&rdquo;.</span>
       </div>
 
-      {selected.length ? (
+      <div className="no-print t-card-soft" style={{padding:14,marginBottom:16}}>
+        {user.role === "admin" ? <div style={{display:"flex",gap:10,alignItems:"end",flexWrap:"wrap"}}>
+          <label>Tanggal pengesahan — {monthLabel(mk)}<input className="t-input" type="date" value={reportDate} disabled={dateLoading || dateSaving} onChange={(e) => {setReportDate(e.target.value);setDateDirty(true);setDateMsg("");}} /></label>
+          <button className="t-btn t-btn-primary" disabled={dateLoading || dateSaving || !reportDate} onClick={saveDate}>{dateSaving ? "Menyimpan..." : "Simpan tanggal bulan ini"}</button>
+        </div> : <span>Tanggal pengesahan: {dateLoading ? "Memuat..." : dateError ? "Tidak tersedia" : longDateID(reportDate)}. Diatur oleh admin.</span>}
+        {dateDirty && <p>Simpan tanggal sebelum mencetak laporan.</p>}
+        {dateError && <p role="alert" style={{color:"var(--red)"}}>{dateError}</p>}
+        {dateMsg && <p role="status">{dateMsg}</p>}
+      </div>
+      {!dateLoading && !dateError && selected.length ? (
         <div className="print-area">
-          {selected.map((s) => <ReportSheet key={s.id} db={db} student={s} mk={mk} />)}
+          {selected.map((s) => <ReportSheet key={s.id} db={db} student={s} mk={mk} reportDate={reportDate || defaultReportDate(mk)} />)}
         </div>
-      ) : <Empty text="Tidak ada siswa pada cakupan ini." />}
+      ) : <Empty text={dateLoading ? "Memuat tanggal laporan..." : dateError ? "Laporan belum dapat ditampilkan. Periksa pesan tanggal laporan di atas." : !validClassId ? "Pilih kelas terlebih dahulu untuk menampilkan laporan." : "Tidak ada siswa pada kelas ini."} />}
     </div>
   );
 }
@@ -1923,62 +2259,68 @@ function MasterData({ db, refresh }) {
     return "";
   }
 
-  function handleFile(e) {
+  async function handleFile(e) {
     const file = e.target.files[0];
     if (!file) return;
     setImportError(""); setImportMsg("");
-    const reader = new FileReader();
-    reader.onload = (ev) => {
-      try {
-        const data = new Uint8Array(ev.target.result);
-        const wb = XLSX.read(data, { type: "array" });
-        const sheet = wb.Sheets[wb.SheetNames[0]];
-        const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
-        const mapped = json
-          .map((row) => ({
-            nama: String(getField(row, ["nama", "namasiswa", "name"])).trim(),
-            nis: String(getField(row, ["nis", "nomorindukswa", "nomorindukssiswa", "nisn"])).trim(),
-            kelas: String(getField(row, ["kelas", "class", "rombel"])).trim(),
-            jenisKelamin: normalizeGender(getField(row, ["jeniskelamin", "gender", "jk", "lp"])),
-          }))
-          .filter((r) => r.nama);
-        if (!mapped.length) {
-          setImportError("Tidak ada baris valid ditemukan. Pastikan file memiliki kolom Nama, Kelas, dan Jenis Kelamin.");
-          setPreview([]);
-        } else {
-          setPreview(mapped);
-        }
-      } catch (err) {
-        setImportError("Gagal membaca file. Pastikan formatnya .xlsx, .xls, atau .csv.");
+    try {
+      const XLSX = await loadXlsx();
+      const data = new Uint8Array(await file.arrayBuffer());
+      const wb = XLSX.read(data, { type: "array" });
+      const sheet = wb.Sheets[wb.SheetNames[0]];
+      const json = XLSX.utils.sheet_to_json(sheet, { defval: "" });
+      const mapped = json
+        .map((row) => ({
+          nama: String(getField(row, ["nama", "namasiswa", "name"])).trim(),
+          nis: String(getField(row, ["nis", "nomorinduksiswa", "nomorindukswa", "nomorindukssiswa"])).trim(),
+          kelas: String(getField(row, ["kelas", "class", "rombel"])).trim(),
+          jenisKelamin: normalizeGender(getField(row, ["jeniskelamin", "gender", "jk", "lp"])),
+        }))
+        .filter((r) => r.nama);
+      if (!mapped.length) {
+        setImportError("Tidak ada baris valid ditemukan. Pastikan file memiliki kolom Nama, Kelas, dan Jenis Kelamin.");
         setPreview([]);
+      } else {
+        setPreview(mapped);
       }
-    };
-    reader.readAsArrayBuffer(file);
+    } catch (err) {
+      setImportError("Gagal membaca file. Pastikan formatnya .xlsx, .xls, atau .csv.");
+      setPreview([]);
+    }
     e.target.value = "";
   }
 
   async function commitImport() {
     setBusy(true);
+    setImportError(""); setImportMsg("");
     try {
+      const seen = new Set();
+      for (const row of preview) {
+        const nis = String(row.nis || "").trim();
+        if (!nis) throw new Error(`NIS wajib diisi untuk ${row.nama}. Lengkapi file lalu impor ulang.`);
+        if (seen.has(nis)) throw new Error(`NIS ${nis} muncul lebih dari sekali dalam file. Sisakan satu baris yang benar lalu impor ulang.`);
+        seen.add(nis);
+      }
       let classes = db.classes;
       const rows = [];
       for (let i = 0; i < preview.length; i++) {
         const row = preview[i];
+        const existing = db.students.find(s => String(s.nis).trim() === String(row.nis).trim());
         let kelasObj = null;
         if (row.kelas) {
           kelasObj = await findOrCreateClassByName(row.kelas, classes);
           if (!classes.some((c) => c.id === kelasObj.id)) classes = [...classes, kelasObj];
         }
         rows.push({
-          nis: row.nis || `IMP${String(Date.now()).slice(-6)}${i}`,
+          nis: String(row.nis).trim(),
           nama: row.nama,
-          jenisKelamin: row.jenisKelamin || "",
-          kelasId: kelasObj ? kelasObj.id : (db.classes[0]?.id || ""),
+          jenisKelamin: row.jenisKelamin || existing?.jenisKelamin || "",
+          kelasId: kelasObj ? kelasObj.id : (existing?.kelasId || null),
         });
       }
-      await bulkInsertStudents(rows);
+      await bulkUpsertStudents(rows);
       await refresh();
-      setImportMsg(`${rows.length} siswa berhasil diimpor. Kalau ada kelas baru dari file, jangan lupa tugaskan pengajarnya di tab Kelas.`);
+      setImportMsg(`${rows.length} data peserta berhasil diproses. NIS yang sudah ada diperbarui, NIS baru ditambahkan. Riwayat presensi, penilaian, dan agama tetap dipertahankan.`);
       setPreview([]);
     } catch (e) {
       setImportError("Gagal mengimpor: " + e.message);
@@ -2029,7 +2371,7 @@ function MasterData({ db, refresh }) {
             <div className="t-card" style={{ padding: 16 }}>
               <div style={{ fontWeight: 700, fontSize: 13, marginBottom: 4 }}>Import dari File</div>
               <div style={{ fontSize: 11.5, color: "#8A8064", marginBottom: 10 }}>
-                Format .xlsx, .xls, atau .csv dengan kolom Nama, NIS (opsional), Kelas, dan Jenis Kelamin.
+                Format .xlsx, .xls, atau .csv dengan kolom Nama, NIS (wajib untuk impor), Kelas, dan Jenis Kelamin.
               </div>
               <button className="t-btn t-btn-ghost" style={{ width: "100%", justifyContent: "center", marginBottom: 8 }} onClick={downloadTemplate}>
                 <FileText size={14} /> Unduh Template
@@ -2092,7 +2434,7 @@ function MasterData({ db, refresh }) {
                     <th style={{ width: 28 }}>
                       <input type="checkbox" checked={selectedIds.length === db.students.length && db.students.length > 0} onChange={toggleSelectAll} />
                     </th>
-                    <th>NIS</th><th>Nama</th><th>L/P</th><th>Kelas</th><th></th>
+                    <th>NIS</th><th>Nama</th><th>L/P</th><th>Agama / Tahfidz</th><th>Kelas</th><th></th>
                   </tr>
                 </thead>
                 <tbody>
@@ -2101,7 +2443,7 @@ function MasterData({ db, refresh }) {
                       <td><input type="checkbox" checked={selectedIds.includes(s.id)} onChange={() => toggleSelect(s.id)} /></td>
                       <td className="font-mono">{s.nis}</td>
                       <td style={{ fontWeight: 600 }}>{s.nama}</td>
-                      <td>{s.jenisKelamin || "-"}</td>
+                      <td>{s.jenisKelamin || "-"}</td><td><StudentReligionEditor student={s} refresh={refresh} /></td>
                       <td>
                         <select
                           className="t-select" style={{ fontSize: 12, padding: "5px 8px" }}
@@ -2170,7 +2512,9 @@ function MasterData({ db, refresh }) {
 /* ============================== ADMIN: MANAJEMEN USER ============================== */
 
 /* ============================== ADMIN: MANAJEMEN USER ============================== */
-function ManajemenUser({ db, refresh }) {
+function ManajemenUser({ db, refresh, user }) {
+  const [search, setSearch] = useState("");
+  const [roleFilter, setRoleFilter] = useState("");
   const [busyId, setBusyId] = useState(null);
   const [showForm, setShowForm] = useState(false);
   const [form, setForm] = useState({ nama: "", email: "", password: "", role: "pengajar" });
@@ -2212,9 +2556,12 @@ function ManajemenUser({ db, refresh }) {
     setCreating(false);
   }
 
-  const roleColor = { admin: "var(--red)", pengajar: "var(--teal)", mentor: "var(--blue)", siswa: "#8A8064" };
+  const visibleProfiles = db.profiles.filter(p =>
+    (p.nama || "").toLocaleLowerCase("id").includes(search.trim().toLocaleLowerCase("id")) &&
+    (!roleFilter || p.role === roleFilter)
+  );
   return (
-    <div>
+    <div className="user-management">
       <SectionTitle sub="Kelola akses akun pengguna, atau buat akun baru untuk pengajar/mentor/admin.">Manajemen User</SectionTitle>
 
       <div style={{ marginBottom: 16 }}>
@@ -2248,7 +2595,7 @@ function ManajemenUser({ db, refresh }) {
               </select>
               {(form.role === "pengajar" || form.role === "mentor") && (
                 <div style={{ fontSize: 11, color: "#8A8064", marginTop: 4 }}>
-                  Data {form.role === "pengajar" ? "pengajar" : "mentor"} baru akan otomatis dibuat dengan nama di atas. Untuk menugaskan kelompok/siswa, atur lewat Master Data setelah akun ini dibuat.
+                  Data {form.role === "pengajar" ? "pengajar" : "mentor"} baru akan otomatis dibuat dengan nama di atas. Untuk pengajar, tugaskan kelas lewat Master Data. Untuk mentor, atur penugasan siswa melalui pengelolaan mentor.
                 </div>
               )}
             </div>
@@ -2260,28 +2607,46 @@ function ManajemenUser({ db, refresh }) {
         </form>
       )}
 
-      <div className="t-card" style={{ padding: 8 }}>
-        <table className="t-table">
-          <thead><tr><th>Nama</th><th>Role</th><th>Status</th><th></th></tr></thead>
+      <div className="t-card um-panel">
+        <div className="um-toolbar">
+          <label className="um-search">Cari pengguna
+            <input className="t-input" type="search" placeholder="Ketik nama pengguna..." value={search} onChange={e => setSearch(e.target.value)} />
+          </label>
+          <label className="um-filter">Filter role
+            <select className="t-select" value={roleFilter} onChange={e => setRoleFilter(e.target.value)}>
+              <option value="">Semua role</option>
+              {Object.entries(ROLE_LABEL).map(([value,label]) => <option key={value} value={value}>{label}</option>)}
+            </select>
+          </label>
+          <span className="um-count" role="status">{visibleProfiles.length} dari {db.profiles.length} pengguna</span>
+        </div>
+        <table className="t-table um-table">
+          <thead><tr><th>Pengguna</th><th>Role & akses</th><th>Status</th><th>Kelola akun</th></tr></thead>
           <tbody>
-            {db.profiles.map((p) => (
+            {visibleProfiles.map(p => (
               <tr key={p.id}>
-                <td style={{ fontWeight: 600 }}>{p.nama}</td>
-                <td><span className="t-tag" style={{ background: roleColor[p.role] + "1A", color: roleColor[p.role] }}>{ROLE_LABEL[p.role]}</span></td>
-                <td>
-                  <span className="t-tag" style={{ background: p.status === "aktif" ? "var(--teal-soft)" : "var(--red-soft)", color: p.status === "aktif" ? "var(--teal)" : "var(--red)" }}>
+                <td data-label="Pengguna">
+                  <div className="um-person">
+                    <span className="um-avatar" aria-hidden="true">{(p.nama || "?").trim().split(/\s+/).slice(0,2).map(n => n[0]).join("").toUpperCase()}</span>
+                    <div><strong>{p.nama}</strong>{p.id === user?.id && <small>Akun Anda</small>}</div>
+                  </div>
+                </td>
+                <td data-label="Role & akses">
+                  <span className={`um-role um-role-${p.role}`}>{ROLE_LABEL[p.role] || p.role}</span>
+                  <RoleChangeButton profile={p} db={db} user={user} refresh={refresh} />
+                </td>
+                <td data-label="Status">
+                  <span className={`um-status ${p.status === "aktif" ? "is-active" : "is-inactive"}`}>
                     {p.status === "aktif" ? "Aktif" : "Nonaktif"}
                   </span>
+                  {p.role !== "admin" && <button type="button" className="um-status-action" onClick={() => toggle(p)} disabled={busyId === p.id}>
+                    {busyId === p.id ? "Menyimpan..." : p.status === "aktif" ? "Nonaktifkan" : "Aktifkan"}
+                  </button>}
                 </td>
-                <td>
-                  {p.role !== "admin" && (
-                    <button className="t-btn t-btn-ghost" style={{ padding: "5px 10px" }} onClick={() => toggle(p)} disabled={busyId === p.id}>
-                      {busyId === p.id ? "..." : p.status === "aktif" ? "Nonaktifkan" : "Aktifkan"}
-                    </button>
-                  )}
-                </td>
+                <td data-label="Kelola akun"><AdminUserActions profile={p} db={db} /></td>
               </tr>
             ))}
+            {!visibleProfiles.length && <tr><td colSpan={4} className="um-empty">Tidak ada pengguna yang cocok. Coba nama atau filter lain.</td></tr>}
           </tbody>
         </table>
       </div>
@@ -2312,9 +2677,9 @@ function Monitoring({ db }) {
       <div className="t-card" style={{ padding: 18, marginBottom: 16 }}>
         <ResponsiveContainer width="100%" height={220}>
           <BarChart data={rows}>
-            <CartesianGrid stroke="#E4DCC9" vertical={false} />
-            <XAxis dataKey="nama" tick={{ fontSize: 11 }} stroke="#8A8064" interval={0} angle={-15} textAnchor="end" height={50} />
-            <YAxis tick={{ fontSize: 12 }} stroke="#8A8064" />
+            <CartesianGrid stroke="#e4e4e7" vertical={false} />
+            <XAxis dataKey="nama" tick={{ fontSize: 11 }} stroke="#71717a" interval={0} angle={-15} textAnchor="end" height={50} />
+            <YAxis tick={{ fontSize: 12 }} stroke="#71717a" />
             <Tooltip />
             <Bar dataKey="setoran" fill="#2F6F63" radius={[6, 6, 0, 0]} name="Jumlah Setoran" />
           </BarChart>
@@ -2352,28 +2717,65 @@ export default function TahfidzApp() {
   const [view, setView] = useState("dashboard");
   const [recoveryMode, setRecoveryMode] = useState(false);
   const [mobileNavOpen, setMobileNavOpen] = useState(false);
+  const sessionHandledRef = useRef("");
 
-  async function refresh() {
+  async function refresh(options) {
+    if (options?.attendanceFor) {
+      const {studentIds, date} = options.attendanceFor;
+      const attendance = await fetchAttendanceForDate(studentIds, date);
+      const ids = new Set(studentIds || []);
+      setDb((prev) => prev ? { ...prev, attendance: [...prev.attendance.filter((row) => !(ids.has(row.studentId) && row.tanggal === date)), ...attendance] } : prev);
+      return;
+    }
+    if (options?.scoresForMany?.length) {
+      const studentIds = [...new Set(options.scoresForMany.filter(Boolean))];
+      const scores = await fetchScoresForStudents(studentIds);
+      setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => !studentIds.includes(s.studentId)), ...scores] } : prev);
+      return;
+    }
+    if (options?.scoresFor) {
+      const scores = await fetchStudentScores(options.scoresFor);
+      setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => s.studentId !== options.scoresFor), ...scores] } : prev);
+      return;
+    }
     try {
       const data = await fetchAllData();
       setDb(data);
+      if (options?.cacheKey) {
+        try { sessionStorage.setItem(`saqu-db-cache:${options.cacheKey}`, JSON.stringify({ savedAt: Date.now(), data })); } catch { /* cache is optional */ }
+      }
+      return data;
     } catch (e) {
       console.error("Gagal memuat data:", e);
+      throw e;
     }
   }
 
   async function handleSession(session) {
+    const sessionKey = session?.user?.id || "signed-out";
+    if (sessionHandledRef.current === sessionKey) return;
+    sessionHandledRef.current = sessionKey;
     if (!session) {
       setProfile(null);
       setDb(null);
       setLoading(false);
       return;
     }
-    const { data: prof, error } = await supabase
-      .from("profiles")
-      .select("*")
-      .eq("id", session.user.id)
-      .single();
+    let prof;
+    let error;
+    try {
+      ({ data: prof, error } = await withClientTimeout(
+        supabase.from("profiles").select("*").eq("id", session.user.id).single(),
+        "Memuat profil pengguna",
+      ));
+    } catch (profileError) {
+      console.error("Gagal memuat profil pengguna:", profileError);
+      setAuthError("Tidak dapat menghubungkan ke database: " + profileError.message);
+      setProfile(null);
+      setDb(null);
+      setLoading(false);
+      return;
+    }
 
     if (error || !prof) {
       setAuthError("Akun ini belum terhubung ke profil peran. Hubungi Admin untuk menyelesaikan setup akun.");
@@ -2391,12 +2793,34 @@ export default function TahfidzApp() {
     }
     setAuthError("");
     setProfile({ id: prof.id, nama: prof.nama, role: prof.role, refId: prof.ref_id, status: prof.status });
-    await refresh();
-    setLoading(false);
+    let cached = null;
+    try {
+      const raw = sessionStorage.getItem(`saqu-db-cache:${prof.id}`);
+      if (raw) {
+        const parsed = JSON.parse(raw);
+        if (parsed?.data && Date.now() - Number(parsed.savedAt || 0) < 15 * 60 * 1000) cached = parsed.data;
+      }
+    } catch { /* ignore unavailable/corrupt cache */ }
+    if (cached) {
+      setDb(cached);
+      setLoading(false);
+      // Tampilkan cache segera, lalu sinkronkan data terbaru tanpa memblokir layar.
+      refresh({cacheKey: prof.id}).catch(e => console.warn("Sinkronisasi data berjalan di latar belakang:", e));
+      return;
+    }
+    try { await refresh({cacheKey: prof.id}); }
+    catch (e) { setAuthError("Data aplikasi gagal dimuat: " + e.message); setProfile(null); setDb(null); }
+    finally { setLoading(false); }
   }
 
   useEffect(() => {
-    supabase.auth.getSession().then(({ data: { session } }) => handleSession(session));
+    withClientTimeout(supabase.auth.getSession(), "Memeriksa sesi login")
+      .then(({ data: { session } }) => handleSession(session))
+      .catch((error) => {
+        console.error("Gagal memeriksa sesi login:", error);
+        setAuthError("Tidak dapat menghubungkan ke database: " + error.message);
+        setLoading(false);
+      });
     const { data: listener } = supabase.auth.onAuthStateChange((event, session) => {
       if (event === "PASSWORD_RECOVERY") {
         setRecoveryMode(true);
@@ -2415,13 +2839,16 @@ export default function TahfidzApp() {
     // handleSession dipanggil otomatis lewat onAuthStateChange
   }
   async function handleLogout() {
-    await supabase.auth.signOut();
+    const { error } = await supabase.auth.signOut();
+    if (error) throw error;
     setView("dashboard");
+    setMobileNavOpen(false);
   }
   async function handleRecoveryDone() {
     setRecoveryMode(false);
     setLoading(true);
     const { data: { session } } = await supabase.auth.getSession();
+    sessionHandledRef.current = "";
     await handleSession(session);
   }
 
@@ -2455,27 +2882,30 @@ export default function TahfidzApp() {
   }
 
   const user = profile;
+  const activityDb = tahfidzData(db);
 
   let content = null;
   if (view === "dashboard") {
-    if (user.role === "admin") content = <DashboardAdmin db={db} />;
-    if (user.role === "pengajar") content = <DashboardPengajar db={db} user={user} />;
-    if (user.role === "mentor") content = <DashboardMentor db={db} user={user} />;
-    if (user.role === "siswa") content = <DashboardSiswa db={db} user={user} />;
+    if (user.role === "admin") content = <DashboardAdmin db={activityDb} />;
+    if (user.role === "pengajar") content = <DashboardPengajar db={activityDb} user={user} />;
+    if (user.role === "mentor") content = <DashboardMentor db={activityDb} user={user} />;
+    if (user.role === "siswa") content = <DashboardSiswa db={activityDb} user={user} />;
+  } else if (view === "teacher-attendance" && user.role === "admin") {
+    content = <TeacherAttendanceAdmin db={db} />;
   } else if (view === "presensi") {
-    content = user.role === "pengajar" ? <PresensiHarian db={db} refresh={refresh} user={user} /> : <PresensiSiswa db={db} user={user} />;
+    content = user.role === "pengajar" ? <PresensiHarian db={activityDb} refresh={refresh} user={user} /> : <PresensiSiswa db={activityDb} user={user} />;
   } else if (view === "penilaian") {
-    content = <PenilaianTahfidz db={db} refresh={refresh} user={user} />;
+    content = <PenilaianTahfidz db={activityDb} refresh={refresh} user={user} />;
   } else if (view === "rekap") {
-    content = <RekapView db={db} user={user} />;
+    content = <RekapView db={activityDb} user={user} refresh={refresh} />;
   } else if (view === "master") {
     content = <MasterData db={db} refresh={refresh} />;
   } else if (view === "userman") {
-    content = <ManajemenUser db={db} refresh={refresh} />;
+    content = <ManajemenUser db={db} refresh={refresh} user={user} />;
   } else if (view === "monitoring") {
-    content = <Monitoring db={db} />;
+    content = <Monitoring db={activityDb} />;
   } else if (view === "report") {
-    content = <ReportBulanan db={db} user={user} />;
+    content = <ReportBulanan db={activityDb} user={user} />;
   } else if (view === "profil") {
     content = <ProfilSaya db={db} refresh={refresh} user={user} />;
   } else if (view === "password") {
@@ -2485,19 +2915,14 @@ export default function TahfidzApp() {
   return (
     <div className="tahfidz-root" style={{ display: "flex", flexDirection: "column" }}>
       <GlobalStyle />
-      <div className="app-topbar no-print">
-        <button onClick={() => setMobileNavOpen(true)} aria-label="Buka menu">
-          <Menu size={22} />
-        </button>
-        <div style={{ display: "flex", alignItems: "center", gap: 8 }}>
-          <img src={RUTABA_LOGO} alt="Logo" style={{ width: 22, height: 22, borderRadius: "50%", objectFit: "cover" }} />
-          <span className="font-display" style={{ color: "white", fontWeight: 700, fontSize: 15 }}>Tahfidz</span>
-        </div>
-      </div>
+      <AppHeader user={user} roleLabel={ROLE_LABEL[user.role]} viewLabel={NAV_BY_ROLE[user.role]?.find((item)=>item.id===view)?.label || "Dashboard"}
+        photoUrl={user.role === "pengajar" ? db.teachers.find((t)=>t.id===user.refId)?.fotoUrl : null}
+        onMenu={() => setMobileNavOpen(true)} onLogout={handleLogout} />
       <div style={{ display: "flex", flex: 1 }}>
-        <Sidebar user={user} view={view} setView={setView} onLogout={handleLogout} mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
+        <Sidebar user={user} view={view} setView={setView} mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
         <div className="app-content" style={{ flex: 1, padding: 28, maxWidth: 1180, minWidth: 0 }}>{content}</div>
       </div>
     </div>
   );
 }
+

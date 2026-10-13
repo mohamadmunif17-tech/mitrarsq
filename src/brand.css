@@ -1,0 +1,98 @@
+.saqu-sr-only { position:absolute; width:1px; height:1px; padding:0; margin:-1px; overflow:hidden; clip-path:inset(50%); white-space:nowrap; border:0; }
+.saqu-login-logo { display:block; width:240px; max-width:100%; height:auto; border-radius:12px; }
+.saquin-login-wordmark { margin-top:10px; display:flex; flex-direction:column; gap:3px; text-align:center; color:#27272a; }
+.saquin-login-wordmark strong { font-size:20px; letter-spacing:.12em; }
+.saquin-login-wordmark span { font-size:12px; color:#71717a; }
+.saquin-mark { display:grid; place-items:center; width:42px; height:42px; flex:0 0 42px; border-radius:13px; background:#16704d; color:#fff; font-size:24px; font-weight:800; letter-spacing:.04em; box-shadow:0 4px 12px #16704d2b; }
+.saquin-login-mark { width:78px; height:78px; flex-basis:78px; border-radius:22px; font-size:42px; }
+/* SAQU visual system. Screen scoped so printed school reports retain their layout. */
+@media screen {
+  .tahfidz-root.tahfidz-root {
+    --ink:#27272a; --paper:#f6f6f8; --panel:#fff; --panel-soft:#f4f4f5;
+    --line:#e4e4e7; --gold:#64748b; --gold-soft:#eef1f5;
+    --teal:#16704d; --teal-soft:#e8f4ed; --red:#bd2333; --red-soft:#fff0f1;
+    --blue:#285ea8; --blue-soft:#edf3ff;
+    font-family:'Inter','Segoe UI',sans-serif; font-size:14px; line-height:1.5;
+    -webkit-font-smoothing:antialiased;
+  }
+  .tahfidz-root.tahfidz-root .font-display,.tahfidz-root.tahfidz-root .font-mono { font-family:'Inter','Segoe UI',sans-serif; font-variant-numeric:tabular-nums; letter-spacing:-.035em; }
+  .tahfidz-root button,.tahfidz-root input,.tahfidz-root select,.tahfidz-root textarea { font-family:inherit; }
+  .tahfidz-root h2,.tahfidz-root h3 { letter-spacing:-.025em; }
+  .tahfidz-root [style*="color: rgb(138, 128, 100)"],.tahfidz-root [style*="color:#8A8064"],.tahfidz-root [style*="color: #8A8064"],.tahfidz-root [style*="color: rgb(180, 170, 140)"] { color:#666670 !important; }
+  .tahfidz-root .t-card { border-radius:18px; box-shadow:0 3px 12px #18181b04; }
+  .tahfidz-root .t-card-soft { background:#f7f7f9; }
+  .tahfidz-root .t-btn { min-height:44px; border-radius:10px; transition:background .15s,box-shadow .15s; }
+  .tahfidz-root .t-btn-primary { background:#c62032; color:white; }
+  .tahfidz-root .t-btn-primary:hover:not(:disabled) { background:#a81728; box-shadow:0 3px 10px #c6203220; }
+  .tahfidz-root .t-btn-gold { background:#34343b; }
+  .tahfidz-root .t-btn-gold:hover:not(:disabled) { background:#18181b; }
+  .tahfidz-root button:focus-visible { outline:3px solid #e78b95; outline-offset:3px; }
+  .tahfidz-root .t-input,.tahfidz-root .t-select { min-height:44px; border-radius:10px; font-size:14px; }
+  .tahfidz-root .t-input:focus,.tahfidz-root .t-select:focus { border-color:#c62032; box-shadow:0 0 0 3px #c6203212; outline:none; }
+  .tahfidz-root .t-table th { background:#f7f7f9; color:#676772; letter-spacing:.06em; font-size:10px; }
+  .tahfidz-root .t-table td { padding:15px 12px; }
+  .tahfidz-root .t-table tbody tr:hover { background:#fafafa; }
+  .tahfidz-root .app-sidebar { background:#242427 !important; scrollbar-width:thin; scrollbar-color:#52525b #242427; }
+  .tahfidz-root .t-nav-item { min-height:44px; margin-bottom:4px; color:#dedee3; font-size:12px; }
+  .tahfidz-root .t-nav-item.active { background:#c62032; color:#fff; box-shadow:0 4px 12px #0002; }
+  .tahfidz-root .portal-intro { background:linear-gradient(115deg,#29292f 20%,#483038 100%); border-left:4px solid #e32b3d; padding:24px 26px; }
+  .tahfidz-root .portal-intro small { color:#fca5af; }
+  .tahfidz-root .portal-intro p { color:#e4e4e7; font-size:13px; }
+  .tahfidz-root .portal-intro-icon { color:#fca5af; }
+  .tahfidz-root .portal-breadcrumb,.tahfidz-root .portal-user span { color:#71717a; }
+  .tahfidz-root .portal-breadcrumb strong { color:#3f3f46; }
+  .tahfidz-root .portal-avatar { background:#f4f4f5; color:#52525b; }
+  .tahfidz-root .portal-logout { min-height:44px; color:#b21d2f; border-color:#efd8dd; }
+  .tahfidz-root .portal-logout:hover { background:#fff0f2; }
+  .tahfidz-root .student-class-label { color:#52525b; background:#f0f0f3; }
+  .tahfidz-root [style*="color: rgb(122, 94, 50)"] { color:#526071 !important; }
+  .tahfidz-root .app-content { width:100%; }
+  .tahfidz-root .grid-4,.tahfidz-root .grid-3,.tahfidz-root .grid-2 { min-width:0; }
+  .tahfidz-root .grid-4 > *,.tahfidz-root .grid-3 > *,.tahfidz-root .grid-2 > * { min-width:0; }
+  .tahfidz-root .ta-heading p,.tahfidz-root .ta-muted,.tahfidz-root .ta-count span { color:#666670; }
+  .tahfidz-root .ta-today { background:#f5f5f7; }
+  .tahfidz-root.saqu-auth { background:radial-gradient(ellipse at 15% 15%,#fbe5e8,transparent 50%),radial-gradient(ellipse at 90% 90%,#e9e9ee,transparent 50%),#f8f8fa; padding:32px 20px !important; }
+  .saqu-auth form { max-width:440px !important; background:white; border:1px solid #e4e4e7; border-radius:24px; padding:32px; box-shadow:0 18px 60px #27272a0b; }
+  .saqu-auth .saqu-login-logo { width:190px; }
+  .saqu-auth .saqu-auth-title { font-size:24px; line-height:1.25; letter-spacing:-.04em; margin:18px 0 10px; }
+  .saqu-auth .t-card { border:0; box-shadow:none; padding:0 !important; border-radius:0; }
+  .saqu-auth label { display:block; margin-bottom:7px; }
+  .saqu-auth .t-input { min-height:48px; }
+  .saqu-auth .t-btn-primary { min-height:48px; margin-top:10px !important; }
+  .saqu-auth button[type="button"] { min-height:44px; color:#b21d2f !important; }
+  .saqu-auth form > p { padding-top:18px; border-top:1px solid #eeeef1; line-height:1.7; color:#71717a !important; }
+  @media(min-width:861px) and (max-width:1150px) { .tahfidz-root .grid-4 { grid-template-columns:repeat(2,minmax(0,1fr)); } }
+  @media(max-width:860px) {
+    .tahfidz-root .portal-brand { min-width:0; }
+    .tahfidz-root .app-content { padding:20px 16px !important; }
+    .tahfidz-root .grid-2 { grid-template-columns:minmax(0,1fr); }
+    .tahfidz-root .t-card:has(> .t-table) { overflow-x:auto; }
+    .tahfidz-root .t-table { min-width:540px; }
+    .tahfidz-root .portal-topbar { min-height:72px; }
+  }
+  @media(max-width:480px) {
+    .saqu-auth form { padding:26px 22px; border-radius:20px; }
+    .tahfidz-root .t-input,.tahfidz-root .t-select { font-size:16px; }
+    .tahfidz-root .portal-intro { padding:20px; }
+    .tahfidz-root .t-status-btn { min-height:44px; }
+  }
+  @media(prefers-reduced-motion:reduce) { .tahfidz-root *, .tahfidz-root *::before,.tahfidz-root *::after { transition:none !important; animation:none !important; } }
+}
+@media screen {
+  .portal-topbar .portal-brand { gap:12px; min-width:176px; }
+  .portal-topbar .saqu-header-logo { display:block; width:130px; height:52px; object-fit:contain; flex-shrink:0; }
+  .saquin-wordmark { display:flex; flex-direction:column; line-height:1.05; white-space:nowrap; color:#27272a; }
+  .saquin-wordmark strong { font-size:15px; letter-spacing:.08em; }
+  .saquin-wordmark span { margin-top:4px; font-size:9px; color:#71717a; letter-spacing:.01em; }
+  .saqu-sidebar-brand { padding:0 0 18px; margin-bottom:14px; border-bottom:1px solid #ffffff18; }
+  .saqu-school-logo { width:100%; border-radius:12px; background:white; overflow:hidden; }
+  .saqu-school-logo img { display:block; width:100%; height:auto; }
+  @media(max-width:1000px) { .portal-topbar .portal-breadcrumb { display:none; } }
+  @media(max-width:767px) {
+    .portal-topbar .portal-brand { min-width:0; gap:8px; }
+    .portal-topbar .saqu-header-logo { width:120px; height:48px; }
+    .saquin-wordmark span { display:none; }
+    .portal-topbar { gap:8px; }
+    .portal-topbar .portal-logout { margin-left:0; padding:9px 10px; }
+  }
+}
