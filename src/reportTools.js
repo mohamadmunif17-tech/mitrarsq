@@ -14,12 +14,12 @@ export function longDateID(date) {
 
 export function canDeleteScore(user, score, db) {
   if (user.status !== "aktif") return false;
+  if (db.academicYear && db.academicYear.status !== "active") return false;
   if (user.role === "admin") return true;
   if (score.inputBy !== user.id) return false;
   if (user.role === "mentor") return db.mentorAssignments.some((a) => a.mentorId === user.refId && a.studentId === score.studentId);
   if (user.role !== "pengajar") return false;
-  const student = db.students.find((s) => s.id === score.studentId);
-  return !!student && db.classes.some((c) => c.id === student.kelasId && c.teacherId === user.refId);
+  return db.classes.some((c) => c.id === score.classId && c.teacherId === user.refId);
 }
 
 export function saveBlob(bytes, filename, type) {

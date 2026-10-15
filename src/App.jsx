@@ -14,8 +14,10 @@ import { AdminUserActions, DeleteScoreButton } from "./ExtraFeatures.jsx";
 import { PIC_TAHFIDZ, defaultReportDate, longDateID } from "./reportTools.js";
 import { buildStudentRecap } from "./studentRecapModel.js";
 import { replaceActivityRange } from "./activityDataModel.js";
+import AcademicYearSelector from "./AcademicYearSelector.jsx";
+import { projectAcademicData, selectedAcademicYear, yearMonthOptions, dateInAcademicYear, canWriteAcademicYear } from "./academicYearModel.js";
 import { fetchReportMonthSettings, saveReportMonthSettings } from "./db.js";
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, lazy, Suspense } from "react";
 import {
   LayoutDashboard, ClipboardCheck, BookOpen, Users, Settings, BarChart3,
   FileText, LogOut, CheckCircle2, XCircle, MinusCircle, CircleDot,
@@ -40,6 +42,25 @@ import {
 
 const CLIENT_REQUEST_TIMEOUT_MS = 15000;
 let xlsxModulePromise;
+const AcademicYearPanel = lazy(() => import("./AcademicYearPanel.jsx"));
+
+function academicView(db, options = {}) {
+  const raw = db.rawAcademicDb || db;
+  return { ...tahfidzData(projectAcademicData(raw, db.academicYear?.id, options)), rawAcademicDb: raw };
+}
+function academicMonth(db) {
+  const options = yearMonthOptions(db.academicYear);
+  return options.includes(currentMonthKey()) ? currentMonthKey() : options[0] || currentMonthKey();
+}
+function academicDate(db) {
+  const year = db.academicYear;
+  const today = isoDaysAgo(0);
+  return year ? (today < year.startsOn ? year.startsOn : today > year.endsOn ? year.endsOn : today) : today;
+}
+function academicMonthRange(db, month) {
+  const year = db.academicYear;
+  return { fromDate: `${month}-01` < year.startsOn ? year.startsOn : `${month}-01`, toDate: defaultReportDate(month) > year.endsOn ? year.endsOn : defaultReportDate(month) };
+}
 
 function withClientTimeout(request, label, timeoutMs = CLIENT_REQUEST_TIMEOUT_MS) {
   let timer;
@@ -329,15 +350,15 @@ function attendancePct(records) {
   return Math.round((hadir / records.length) * 100);
 }
 
-function daysSinceLastScore(scores) {
+function daysSinceLastScore(scores, referenceDate = isoDaysAgo(0)) {
   if (!scores.length) return null;
   const latest = [...scores].sort((a, b) => (a.tanggal > b.tanggal ? -1 : 1))[0];
-  const diffMs = new Date(isoDaysAgo(0)) - new Date(latest.tanggal);
+  const diffMs = new Date(referenceDate) - new Date(latest.tanggal);
   return Math.round(diffMs / (1000 * 60 * 60 * 24));
 }
 
 function buildAlerts(db, students) {
-  const mk = currentMonthKey();
+  const mk = academicMonth(db);
   const alerts = [];
   students.forEach((s) => {
     const att = db.attendance.filter((a) => a.studentId === s.id && monthKey(a.tanggal) === mk);
@@ -346,7 +367,7 @@ function buildAlerts(db, students) {
     if (att.length >= 3 && attendancePct(att) < 75) {
       reasons.push(`Kehadiran ${attendancePct(att)}% bulan ini`);
     }
-    const gap = daysSinceLastScore(scores);
+    const gap = daysSinceLastScore(scores, academicDate(db));
     if (gap === null) {
       reasons.push("Belum pernah setor");
     } else if (gap >= 10) {
@@ -358,7 +379,7 @@ function buildAlerts(db, students) {
 }
 
 function buildLeaderboard(db, students, limit = 5) {
-  const mk = currentMonthKey();
+  const mk = academicMonth(db);
   return students
     .map((s) => {
       const scores = db.scores.filter((sc) => sc.studentId === s.id && monthKey(sc.tanggal) === mk);
@@ -572,6 +593,7 @@ function LoginScreen({ onLoginSuccess }) {
 const NAV_BY_ROLE = {
   admin: [
     { id: "dashboard", label: "Dashboard", icon: LayoutDashboard },
+    { id: "academic-years", label: "Tahun Pelajaran", icon: GraduationCap },
     { id: "teacher-attendance", label: "Kehadiran Pengajar", icon: CalendarCheck },
     { id: "master", label: "Master Data", icon: Users },
     { id: "userman", label: "Manajemen User", icon: UserCog },
@@ -1084,7 +1106,7 @@ function Sidebar({ user, view, setView, mobileOpen, onClose }) {
 
 /* ============================== DASHBOARDS ============================== */
 function DashboardAdmin({ db }) {
-  const mk = currentMonthKey();
+  const mk = academicMonth(db);
   const monthScores = db.scores.filter((s) => monthKey(s.tanggal) === mk);
   const monthAtt = db.attendance.filter((a) => monthKey(a.tanggal) === mk);
   const perTeacher = db.teachers.map((t) => {
@@ -1163,20 +1185,20 @@ function DashboardPengajar({ db, user }) {
   const validBinaanClass = classes.some(c => c.id === binaanClass) ? binaanClass : "all";
   const visibleMembers = members.filter(m => validBinaanClass === "all" || m.kelasId === validBinaanClass)
     .sort((a,b) => a.nama.localeCompare(b.nama,"id"));
-  const mk = currentMonthKey();
-  const memberIds = members.map((m) => m.id);
-  const monthScores = db.scores.filter((s) => monthKey(s.tanggal) === mk && memberIds.includes(s.studentId));
-  const todayAtt = db.attendance.filter((a) => a.tanggal === isoDaysAgo(0) && memberIds.includes(a.studentId));
+  const mk = academicMonth(db);
+  const ownedClassIds = new Set(classes.map((c) => c.id));
+  const monthScores = db.scores.filter((s) => monthKey(s.tanggal) === mk && ownedClassIds.has(s.classId));
+  const todayAtt = db.attendance.filter((a) => a.tanggal === academicDate(db) && ownedClassIds.has(a.classId));
   const alerts = buildAlerts(db, members);
   const leaderboard = buildLeaderboard(db, members);
 
   return (
     <div>
       <div className="portal-intro dashboard-intro"><div><small>Dashboard pengajar</small><h2>Selamat datang, {user.nama}</h2><p>{classListLabel(classes)} · {members.length} siswa binaan</p></div><div className="dashboard-intro-actions"><DashboardClock /><span className="portal-intro-icon"><BookOpen size={27} /></span></div></div>
-      <TeacherAttendanceDashboard user={user} />
+      <TeacherAttendanceDashboard user={user} db={db} />
       <div className="grid-3" style={{ gap: 14, marginBottom: 20 }}>
         <StatCard icon={Users} label="Siswa Diampu" value={members.length} sub={classListLabel(classes)} />
-        <StatCard icon={CalendarCheck} label="Presensi Siswa Hari Ini" value={`${todayAtt.filter((a) => a.status === "HADIR").length}/${members.length}`} sub="Hadir hari ini" accent="gold" />
+        <StatCard icon={CalendarCheck} label="Presensi Siswa" value={`${todayAtt.filter((a) => a.status === "HADIR").length}/${members.length}`} sub={`Tanggal ${fmtDate(academicDate(db))}`} accent="gold" />
         <StatCard icon={BookOpen} label="Setoran Bulan Ini" value={monthScores.length} sub={`Rata-rata nilai ${avg(monthScores.map((s) => s.nilai))}`} />
       </div>
       <div className="grid-2" style={{ gap: 14, marginBottom: 14 }}>
@@ -1231,7 +1253,7 @@ function DashboardPengajar({ db, user }) {
 function DashboardMentor({ db, user }) {
   const mentor = db.mentors.find((m) => m.id === user.refId);
   const students = mentorStudents(db, mentor.id);
-  const mk = currentMonthKey();
+  const mk = academicMonth(db);
   const ids = students.map((s) => s.id);
   const monthScores = db.scores.filter((s) => monthKey(s.tanggal) === mk && ids.includes(s.studentId));
   const alerts = buildAlerts(db, students);
@@ -1288,7 +1310,7 @@ function DashboardSiswa({ db, user }) {
   if (!student) return <Empty text="Akun ini tidak termasuk peserta Tahfidz atau data siswa belum terhubung. Hubungi admin bila perlu diperiksa." />;
   const scores = studentScores(db, student.id);
   const attendance = studentAttendance(db, student.id);
-  const mk = currentMonthKey();
+  const mk = academicMonth(db);
   const monthScores = scores.filter((s) => monthKey(s.tanggal) === mk);
   const monthAtt = attendance.filter((a) => monthKey(a.tanggal) === mk);
   const chartData = [...scores].reverse().map((s) => ({ tanggal: fmtDate(s.tanggal).slice(0, 6), nilai: s.nilai }));
@@ -1327,19 +1349,21 @@ function DashboardSiswa({ db, user }) {
 }
 
 /* ============================== PRESENSI HARIAN ============================== */
-function PresensiHarian({ db, refresh, user }) {
+function PresensiHarian({ db: yearDb, refresh, user }) {
+  const [tanggal, setTanggal] = useState(academicDate(yearDb));
+  const db = academicView(yearDb, { asOf: tanggal });
   const availableClasses = teacherClasses(db, user.refId);
   const members = teacherStudents(db, user.refId);
   const [kelasFilter, setKelasFilter] = useState("all");
   const visibleMembers = members
     .filter(m => kelasFilter === "all" || m.kelasId === kelasFilter)
     .sort((a,b) => (a.nama || "").trim().localeCompare((b.nama || "").trim(), "id", {sensitivity:"base", numeric:true}));
-  const [tanggal, setTanggal] = useState(isoDaysAgo(0));
   const [draft, setDraft] = useState({});
   const [saved, setSaved] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [saving, setSaving] = useState(false);
 
+  const presenceSnapshot = members.map((m) => m.id).join("|") + ":" + db.attendance.filter((r) => r.tanggal === tanggal).map((r) => `${r.id}:${r.status}`).join("|");
   useEffect(() => {
     const map = {};
     members.forEach((m) => {
@@ -1349,7 +1373,7 @@ function PresensiHarian({ db, refresh, user }) {
     setDraft(map);
     setSaved(false); setSaveMessage("");
     // eslint-disable-next-line
-  }, [tanggal]);
+  }, [tanggal, presenceSnapshot]);
 
   function setStatus(studentId, status) {
     setDraft((d) => ({ ...d, [studentId]: status }));
@@ -1364,6 +1388,7 @@ function PresensiHarian({ db, refresh, user }) {
   async function simpan() {
     if (saving) return;
     setSaved(false); setSaveMessage("");
+    if (!canWriteAcademicYear(db.academicYear) || !dateInAcademicYear(tanggal, db.academicYear)) { setSaveMessage("Pilih tanggal dalam tahun pelajaran aktif."); return; }
     const newRecords = members.filter((m) => draft[m.id]).map((m) => ({
       studentId: m.id,
       tanggal,
@@ -1398,7 +1423,7 @@ function PresensiHarian({ db, refresh, user }) {
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input type="date" className="t-input" style={{ width: 180 }} disabled={saving} value={tanggal} max={isoDaysAgo(0)} onChange={(e) => setTanggal(e.target.value)} />
+          <input type="date" className="t-input" style={{ width: 180 }} disabled={saving} value={tanggal} min={db.academicYear.startsOn} max={db.academicYear.endsOn < isoDaysAgo(0) ? db.academicYear.endsOn : isoDaysAgo(0)} onChange={(e) => { if (dateInAcademicYear(e.target.value, db.academicYear)) setTanggal(e.target.value); }} />
           {availableClasses.length > 1 && (
             <select className="t-select" style={{ width: 200 }} value={kelasFilter} onChange={(e) => setKelasFilter(e.target.value)}>
               <option value="all">Semua Kelas ({members.length} siswa)</option>
@@ -1410,8 +1435,8 @@ function PresensiHarian({ db, refresh, user }) {
           )}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="t-btn t-btn-ghost" disabled={saving} onClick={hadirSemua}>Tandai Hadir Semua{kelasFilter !== "all" ? " (Kelas Ini)" : ""}</button>
-          <button className="t-btn t-btn-primary" onClick={simpan} disabled={saving || !members.length}>
+          <button className="t-btn t-btn-ghost" disabled={saving || !canWriteAcademicYear(db.academicYear)} onClick={hadirSemua}>Tandai Hadir Semua{kelasFilter !== "all" ? " (Kelas Ini)" : ""}</button>
+          <button className="t-btn t-btn-primary" onClick={simpan} disabled={saving || !members.length || !canWriteAcademicYear(db.academicYear)}>
             {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} {saving ? "Menyimpan..." : "Simpan Presensi"}
           </button>
         </div>
@@ -1431,7 +1456,7 @@ function PresensiHarian({ db, refresh, user }) {
                       <button
                         key={key}
                         className={`t-status-btn ${draft[m.id] === key ? "selected-" + key : ""}`}
-                        disabled={saving} onClick={() => setStatus(m.id, key)}
+                        disabled={saving || !canWriteAcademicYear(db.academicYear)} onClick={() => setStatus(m.id, key)}
                       >
                         <meta.icon size={15} /> {meta.label}
                       </button>
@@ -1448,7 +1473,9 @@ function PresensiHarian({ db, refresh, user }) {
 }
 
 /* ============================== PENILAIAN TAHFIDZ ============================== */
-function PenilaianTahfidz({ db, refresh, user }) {
+function PenilaianTahfidz({ db: yearDb, refresh, user }) {
+  const [tanggal, setTanggal] = useState(academicDate(yearDb));
+  const db = academicView(yearDb, { asOf: tanggal });
   const isMentor = user.role === "mentor";
   const scopeStudents = isMentor
     ? mentorStudents(db, user.refId)
@@ -1467,7 +1494,6 @@ function PenilaianTahfidz({ db, refresh, user }) {
   const [ayatAkhir, setAyatAkhir] = useState(1);
   const [nilaiHuruf, setNilaiHuruf] = useState("A");
   const [catatan, setCatatan] = useState("");
-  const [tanggal, setTanggal] = useState(isoDaysAgo(0));
   const [msg, setMsg] = useState("");
   const [saving, setSaving] = useState(false);
   const [templateBusy, setTemplateBusy] = useState(false);
@@ -1491,6 +1517,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
   async function submit() {
     if (saving) return;
     setMsg("");
+    if (!canWriteAcademicYear(db.academicYear) || !dateInAcademicYear(tanggal, db.academicYear)) { setMsg("Pilih tanggal dalam tahun pelajaran aktif."); return; }
     if (!studentId) { setMsg("Pilih siswa terlebih dahulu."); return; }
     if (!filteredStudents.some((s) => s.id === studentId)) {
       setMsg("Siswa tidak termasuk dalam pilihan kelas Anda. Pilih ulang kelas dan siswa.");
@@ -1527,6 +1554,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
       const XLSX = await loadXlsx();
     const data = templateStudents.map((student) => ({
       NIS: student.nis || "", "Nama Siswa": student.nama, Kelas: className(db, student.kelasId),
+      "Tahun Pelajaran": db.academicYear.nama,
       Tanggal: tanggal, Surat: "", "Ayat Mulai": "", "Ayat Akhir": "", Nilai: "",
       Catatan: "", Penguji: user.nama,
     }));
@@ -1605,8 +1633,10 @@ function PenilaianTahfidz({ db, refresh, user }) {
         const start = Number(startValue);
         const end = Number(endValue);
         const grade = String(gradeValue ?? "").trim().toUpperCase();
-        if (!student) errors.push(`Baris ${line}: siswa dengan NIS/nama tersebut tidak ada di kelas.`);
-        else if (!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)) errors.push(`Baris ${line}: tanggal harus berformat YYYY-MM-DD.`);
+        if (row["Tahun Pelajaran"] && String(row["Tahun Pelajaran"]).trim() !== db.academicYear.nama) errors.push(`Baris ${line}: tahun pelajaran tidak sesuai pilihan.`);
+        else if (!student) errors.push(`Baris ${line}: siswa dengan NIS/nama tersebut tidak ada di kelas.`);
+        else if (!dateInAcademicYear(date, db.academicYear)) errors.push(`Baris ${line}: tanggal harus berada dalam tahun pelajaran ${db.academicYear.nama}.`);
+        else if (!academicView(yearDb, { asOf: date }).students.some((s) => s.id === student.id && (kelasFilter === "all" || s.kelasId === kelasFilter))) errors.push(`Baris ${line}: penempatan kelas siswa pada tanggal tersebut tidak sesuai template.`);
         else if (!surah) errors.push(`Baris ${line}: surat tidak dikenali.`);
         else if (!Number.isInteger(start) || !Number.isInteger(end) || start < 1 || end < start || end > Number(surah.ayat)) errors.push(`Baris ${line}: rentang ayat tidak valid untuk ${surah.nama}.`);
         else if (!["A+","A","B+","B","C"].includes(grade)) errors.push(`Baris ${line}: nilai harus A+, A, B+, B, atau C.`);
@@ -1637,7 +1667,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>1. Tanggal</label>
-              <input type="date" className="t-input" max={isoDaysAgo(0)} value={tanggal} onChange={(e) => setTanggal(e.target.value)} />
+              <input type="date" className="t-input" min={db.academicYear.startsOn} max={db.academicYear.endsOn < isoDaysAgo(0) ? db.academicYear.endsOn : isoDaysAgo(0)} value={tanggal} onChange={(e) => { if (dateInAcademicYear(e.target.value, db.academicYear)) setTanggal(e.target.value); }} />
             </div>
 
             {availableClasses.length > 1 && (
@@ -1703,7 +1733,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
             </div>
 
             {msg && <div className={`save-feedback ${msg.includes("tersimpan") ? "success" : "error"}`} role={msg.includes("tersimpan") ? "status" : "alert"}>{msg}</div>}
-            <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={submit} disabled={saving || !studentId || !filteredStudents.some((s) => s.id === studentId)}>
+            <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={submit} disabled={saving || !studentId || !filteredStudents.some((s) => s.id === studentId) || !canWriteAcademicYear(db.academicYear)}>
               {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} {saving ? "Menyimpan..." : "Simpan Penilaian"}
             </button>
           </div>
@@ -1734,7 +1764,7 @@ function PenilaianTahfidz({ db, refresh, user }) {
           <button type="button" className="t-btn t-btn-ghost" onClick={downloadAssessmentTemplate} disabled={!templateStudents.length}><Download size={14} /> Unduh Template Excel</button>
           <label className="t-btn t-btn-primary" style={{ cursor: templateBusy ? "not-allowed" : "pointer" }}>
             {templateBusy ? <Loader2 size={14} className="animate-spin" /> : <Upload size={14} />} {templateBusy ? "Mengimpor..." : "Upload Penilaian"}
-            <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleAssessmentTemplate} disabled={templateBusy} />
+            <input type="file" accept=".xlsx,.xls,.csv" style={{ display: "none" }} onChange={handleAssessmentTemplate} disabled={templateBusy || !canWriteAcademicYear(db.academicYear)} />
           </label>
         </div>
         {templateMsg && <p role="status" style={{ margin: "12px 0 0", fontSize: 12, color: templateMsg.startsWith("Impor gagal") ? "var(--red)" : "var(--teal)" }}>{templateMsg}</p>}
@@ -1747,11 +1777,11 @@ function PenilaianTahfidz({ db, refresh, user }) {
 /* ============================== REKAP ============================== */
 function JurnalMengajarPengajar({ db, user }) {
   const classes = teacherClasses(db, user.refId).sort((a, b) => a.nama.localeCompare(b.nama, "id", { numeric: true }));
-  const [form, setForm] = useState({ classId: classes[0]?.id || "", tanggal: isoDaysAgo(0), materi: "", kegiatan: "", hasil: "", catatan: "" });
+  const [form, setForm] = useState({ classId: classes[0]?.id || "", tanggal: academicDate(db), materi: "", kegiatan: "", hasil: "", catatan: "" });
   const [busy, setBusy] = useState(false);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
-  const [period, setPeriod] = useState(currentMonthKey());
+  const [period, setPeriod] = useState(academicMonth(db));
   const [journals, setJournals] = useState([]);
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState("");
@@ -1759,7 +1789,7 @@ function JurnalMengajarPengajar({ db, user }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setLoadError("");
-    fetchTeacherJournals(period).then((rows) => { if (!cancelled) setJournals(rows.filter((j) => j.teacherId === user.refId)); })
+    fetchTeacherJournals(period).then((rows) => { if (!cancelled) setJournals(rows.filter((j) => j.teacherId === user.refId && j.academicYearId === db.academicYear.id)); })
       .catch((e) => { if (!cancelled) { setJournals([]); setLoadError(e.message); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -1769,6 +1799,7 @@ function JurnalMengajarPengajar({ db, user }) {
     e.preventDefault();
     setBusy(true); setMessage(""); setError("");
     try {
+      if (!canWriteAcademicYear(db.academicYear) || !dateInAcademicYear(form.tanggal, db.academicYear)) throw new Error("Jurnal hanya dapat disimpan pada tanggal dalam tahun pelajaran aktif.");
       await insertTeacherJournal({ ...form, teacherId: user.refId, inputBy: user.id });
       setPeriod(form.tanggal.slice(0, 7));
       setReloadVersion((v) => v + 1);
@@ -1782,10 +1813,10 @@ function JurnalMengajarPengajar({ db, user }) {
     <div>
       <SectionTitle sub="Catat kegiatan mengajar setiap pertemuan untuk direkap oleh admin.">Jurnal Mengajar</SectionTitle>
       <form className="t-card" style={{ padding: 18, marginBottom: 18, display: "grid", gap: 12, maxWidth: 760 }} onSubmit={submit}>
-        <fieldset disabled={busy} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, display: "grid", gap: 12 }}>
+        <fieldset disabled={busy || !canWriteAcademicYear(db.academicYear)} style={{ border: 0, padding: 0, margin: 0, minWidth: 0, display: "grid", gap: 12 }}>
         <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit,minmax(180px,1fr))", gap: 10 }}>
           <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Tanggal
-            <input className="t-input" type="date" value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} required />
+            <input className="t-input" type="date" min={db.academicYear.startsOn} max={db.academicYear.endsOn} value={form.tanggal} onChange={(e) => setForm({ ...form, tanggal: e.target.value })} required />
           </label>
           <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Kelas
             <select className="t-select" value={form.classId} onChange={(e) => setForm({ ...form, classId: e.target.value })} required>
@@ -1810,11 +1841,11 @@ function JurnalMengajarPengajar({ db, user }) {
         </fieldset>
         {error && <div role="alert" style={{ color: "var(--red)", fontSize: 12, fontWeight: 600 }}>{error}</div>}
         {message && <div role="status" style={{ color: "var(--teal)", fontSize: 12, fontWeight: 600 }}>{message}</div>}
-        <button className="t-btn t-btn-primary" type="submit" disabled={busy || !classes.length}>{busy ? "Menyimpan..." : "Simpan Jurnal"}</button>
+        <button className="t-btn t-btn-primary" type="submit" disabled={busy || !classes.length || !canWriteAcademicYear(db.academicYear)}>{busy ? "Menyimpan..." : "Simpan Jurnal"}</button>
         {!classes.length && <div style={{ color: "var(--red)", fontSize: 12 }}>Belum ada kelas yang ditugaskan kepada Anda.</div>}
       </form>
       <div style={{ display: "flex", gap: 10, alignItems: "end", marginBottom: 12 }}>
-        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Bulan jurnal<input className="t-input" type="month" value={period} onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }} /></label>
+        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Bulan jurnal<input className="t-input" type="month" min={db.academicYear.startsOn.slice(0,7)} max={db.academicYear.endsOn.slice(0,7)} value={period} onChange={(e) => { if (yearMonthOptions(db.academicYear).includes(e.target.value)) setPeriod(e.target.value); }} /></label>
         <button className="t-btn t-btn-ghost" disabled={loading} onClick={() => setReloadVersion((v) => v + 1)}>Muat ulang</button>
       </div>
       {loadError && <p role="alert" style={{ color: "var(--red)", fontSize: 12 }}>{loadError}</p>}
@@ -1831,7 +1862,7 @@ function JurnalMengajarPengajar({ db, user }) {
 }
 
 function JurnalMengajarAdmin({ db }) {
-  const [period, setPeriod] = useState(currentMonthKey());
+  const [period, setPeriod] = useState(academicMonth(db));
   const [classFilter, setClassFilter] = useState("all");
   const [teacherFilter, setTeacherFilter] = useState("all");
   const [busy, setBusy] = useState(false);
@@ -1843,7 +1874,7 @@ function JurnalMengajarAdmin({ db }) {
   useEffect(() => {
     let cancelled = false;
     setLoading(true); setLoadError("");
-    fetchTeacherJournals(period).then((rows) => { if (!cancelled) setJournals(rows); })
+    fetchTeacherJournals(period).then((rows) => { if (!cancelled) setJournals(rows.filter((j) => j.academicYearId === db.academicYear.id)); })
       .catch((e) => { if (!cancelled) { setJournals([]); setLoadError(e.message); } })
       .finally(() => { if (!cancelled) setLoading(false); });
     return () => { cancelled = true; };
@@ -1857,14 +1888,14 @@ function JurnalMengajarAdmin({ db }) {
         No: index + 1, Tanggal: j.tanggal, Kelas: className(db, j.classId), Pengajar: db.teachers.find((t) => t.id === j.teacherId)?.nama || "-",
         Materi: j.materi, "Kegiatan pembelajaran": j.kegiatan, "Hasil/evaluasi": j.hasil || "", "Catatan/tindak lanjut": j.catatan || "",
       }));
-      const options = { periodLabel: monthLabel(period), classLabel: classFilter === "all" ? "Semua kelas" : className(db, classFilter), teacherLabel: teacherFilter === "all" ? "Semua pengajar" : db.teachers.find((t) => t.id === teacherFilter)?.nama || "-" };
+      const options = { academicYearLabel: db.academicYear.nama, periodLabel: monthLabel(period), classLabel: classFilter === "all" ? "Semua kelas" : className(db, classFilter), teacherLabel: teacherFilter === "all" ? "Semua pengajar" : db.teachers.find((t) => t.id === teacherFilter)?.nama || "-" };
       if (format === "pdf") {
         const { downloadJournalPdf } = await import("./pdfExports.js");
         await downloadJournalPdf(rows, options);
       } else {
         const XLSX = await loadXlsx();
-        const sheet = XLSX.utils.aoa_to_sheet([["SAQUIN — Sahabat Quran Indonesia"], ["JURNAL MENGAJAR"], ["Bulan", options.periodLabel], ["Kelas", options.classLabel], ["Pengajar", options.teacherLabel], []]);
-        XLSX.utils.sheet_add_json(sheet, rows, { origin: "A7" });
+        const sheet = XLSX.utils.aoa_to_sheet([["SAQUIN — Sahabat Quran Indonesia"], ["JURNAL MENGAJAR"], ["Tahun pelajaran", options.academicYearLabel], ["Bulan", options.periodLabel], ["Kelas", options.classLabel], ["Pengajar", options.teacherLabel], []]);
+        XLSX.utils.sheet_add_json(sheet, rows, { origin: "A8" });
         sheet["!cols"] = [{ wch: 6 }, { wch: 14 }, { wch: 16 }, { wch: 28 }, { wch: 32 }, { wch: 52 }, { wch: 36 }, { wch: 36 }];
         const book = XLSX.utils.book_new(); XLSX.utils.book_append_sheet(book, sheet, "Jurnal Mengajar");
         XLSX.writeFile(book, `Jurnal_Mengajar_${period}_${safeExportName(options.classLabel)}.xlsx`);
@@ -1878,7 +1909,7 @@ function JurnalMengajarAdmin({ db }) {
     <div>
       <SectionTitle sub="Kumpulan jurnal dari seluruh pengajar yang dapat difilter dan diunduh.">Jurnal Mengajar</SectionTitle>
       <div className="t-card-soft" style={{ padding: 14, marginBottom: 16, display: "flex", gap: 10, flexWrap: "wrap", alignItems: "end" }}>
-        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Bulan<input className="t-input" type="month" value={period} onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }} /></label>
+        <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Bulan<input className="t-input" type="month" min={db.academicYear.startsOn.slice(0,7)} max={db.academicYear.endsOn.slice(0,7)} value={period} onChange={(e) => { if (yearMonthOptions(db.academicYear).includes(e.target.value)) setPeriod(e.target.value); }} /></label>
         <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Kelas<select className="t-select" value={classFilter} onChange={(e) => setClassFilter(e.target.value)}><option value="all">Semua kelas</option>{db.classes.map((c) => <option key={c.id} value={c.id}>{c.nama}</option>)}</select></label>
         <label style={{ display: "grid", gap: 5, fontSize: 12 }}>Pengajar<select className="t-select" value={teacherFilter} onChange={(e) => setTeacherFilter(e.target.value)}><option value="all">Semua pengajar</option>{db.teachers.map((t) => <option key={t.id} value={t.id}>{t.nama}</option>)}</select></label>
         <button className="t-btn t-btn-ghost" disabled={loading} onClick={() => setReloadVersion((v) => v + 1)}>Muat ulang</button>
@@ -1900,13 +1931,19 @@ function JurnalMengajarAdmin({ db }) {
 
 
 /* ============================== REKAP ============================== */
-function RekapView({ db, user, refresh }) {
+function RekapView({ db: yearDb, user, refresh }) {
+  const [period, setPeriod] = useState(academicMonth(yearDb));
+  const [classFilter, setClassFilter] = useState("all");
+  const monthDb = academicView(yearDb, academicMonthRange(yearDb, period));
+  const classDb = classFilter === "all" ? monthDb : academicView(yearDb, { ...academicMonthRange(yearDb, period), classId: classFilter });
+  const ownClassIds = new Set(yearDb.classes.filter((c) => c.teacherId === user.refId).map((c) => c.id));
+  const db = user.role === "pengajar" ? { ...classDb, scores: classDb.scores.filter((r) => ownClassIds.has(r.classId)), attendance: classDb.attendance.filter((r) => ownClassIds.has(r.classId)) } : classDb;
   let students = [];
   let sub = "";
   if (user.role === "admin") { students = db.students; sub = "Seluruh siswa"; }
   if (user.role === "pengajar") {
     const classes = teacherClasses(db, user.refId);
-    students = teacherStudents(db, user.refId);
+    students = db.students.filter((s) => s.academicEnrollments?.some((e) => classes.some((c) => c.id === e.classId)));
     sub = classListLabel(classes);
   }
   if (user.role === "mentor") {
@@ -1917,16 +1954,15 @@ function RekapView({ db, user, refresh }) {
     students = db.students.filter((s) => s.id === user.refId);
     sub = "Riwayat pribadi";
   }
-  const [classFilter, setClassFilter] = useState("all");
   const [filter, setFilter] = useState("all");
-  const availableClasses = db.classes.filter(c => user.role === "admin" ||
-    (user.role === "pengajar" ? c.teacherId === user.refId : students.some(s => s.kelasId === c.id)))
+  const optionStudents = user.role === "mentor" ? mentorStudents(monthDb, user.refId) : user.role === "siswa" ? monthDb.students.filter((s) => s.id === user.refId) : monthDb.students;
+  const availableClasses = yearDb.classes.filter(c => user.role === "admin" ||
+    (user.role === "pengajar" ? c.teacherId === user.refId : optionStudents.some(s => s.academicEnrollments?.some((e) => e.classId === c.id))))
     .sort((a,b) => a.nama.localeCompare(b.nama,"id",{numeric:true}));
   const validClass = availableClasses.some(c => c.id === classFilter) ? classFilter : "all";
   const filteredStudents = students.filter(s => validClass === "all" || s.kelasId === validClass)
     .sort((a,b) => a.nama.localeCompare(b.nama,"id"));
   const validStudent = filteredStudents.some(s => s.id === filter) ? filter : "all";
-  const [period, setPeriod] = useState(currentMonthKey());
   const [exporting, setExporting] = useState(false);
   const [exportError, setExportError] = useState("");
   const [historyLoading, setHistoryLoading] = useState(true);
@@ -1985,7 +2021,7 @@ function RekapView({ db, user, refresh }) {
     .sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
   const attendanceRows = db.attendance
     .filter((record) => recapStudentsById.has(record.studentId) && (!period || monthKey(record.tanggal) === period))
-    .map((record) => ({ ...record, _nama: recapStudentsById.get(record.studentId).nama, _kelas: className(db, recapStudentsById.get(record.studentId).kelasId) }))
+    .map((record) => ({ ...record, _nama: recapStudentsById.get(record.studentId).nama, _kelas: className(yearDb, record.classId) }))
     .sort((a, b) => (a.tanggal < b.tanggal ? 1 : -1));
 
   const studentRecaps = buildStudentRecap({ students: recapStudents, scores: db.scores, attendance: db.attendance, classes: db.classes, surahs: db.surahs, period });
@@ -1997,7 +2033,7 @@ function RekapView({ db, user, refresh }) {
   }));
 
   function exportRows() {
-    return rows.map((r) => ({Siswa:r._nama, Kelas:className(db, db.students.find((s) => s.id === r.studentId)?.kelasId),
+    return rows.map((r) => ({Siswa:r._nama, Kelas:className(yearDb, r.classId),
       Tanggal:r.tanggal, Surat:surahName(db,r.surahId), Ayat:`${r.ayatMulai}-${r.ayatAkhir}`,
       Nilai:r.nilaiHuruf || r.nilai, Penguji:r.penguji || "-", Catatan:r.catatan || ""}));
   }
@@ -2013,19 +2049,21 @@ function RekapView({ db, user, refresh }) {
         const recapSheet = XLSX.utils.aoa_to_sheet([
           ["SAQUIN — Sahabat Quran Indonesia"],
           ["REKAP KEHADIRAN DAN SETORAN PER SISWA"],
+          ["Tahun pelajaran", db.academicYear.nama],
           ["Kelas", validClass === "all" ? "Semua kelas" : className(db, validClass)],
           ["Bulan", period ? monthLabel(period) : "Semua periode"],
           ["Tanggal pengesahan", approvalDate ? longDateID(approvalDate) : "-"],
           [],
         ]);
-        XLSX.utils.sheet_add_json(recapSheet, recapRows, { origin: "A7" });
-        XLSX.utils.sheet_add_aoa(recapSheet, [[""], ["Disahkan oleh PIC Tahfidz"], [approvalDate ? `Malang, ${longDateID(approvalDate)}` : ""], [""], [""], [PIC_TAHFIDZ]], {origin: recapRows.length + 8});
+        XLSX.utils.sheet_add_json(recapSheet, recapRows, { origin: "A8" });
+        XLSX.utils.sheet_add_aoa(recapSheet, [[""], ["Disahkan oleh PIC Tahfidz"], [approvalDate ? `Malang, ${longDateID(approvalDate)}` : ""], [""], [""], [PIC_TAHFIDZ]], {origin: recapRows.length + 9});
         recapSheet["!cols"] = [{wch:6},{wch:32},{wch:16},{wch:16},{wch:9},{wch:9},{wch:9},{wch:9},{wch:16},{wch:16},{wch:14},{wch:18},{wch:90}];
         const sheet = XLSX.utils.json_to_sheet(data);
         sheet["!cols"] = [{wch:32},{wch:14},{wch:14},{wch:22},{wch:12},{wch:8},{wch:28},{wch:45}];
         const attendanceSheet = XLSX.utils.json_to_sheet(exportAttendanceRows());
         attendanceSheet["!cols"] = [{wch:32},{wch:18},{wch:14},{wch:14},{wch:40}];
         const summarySheet = XLSX.utils.json_to_sheet([
+          { Keterangan: "Tahun pelajaran", Nilai: db.academicYear.nama },
           { Keterangan: "Kelas", Nilai: validClass === "all" ? "Semua kelas" : className(db, validClass) },
           { Keterangan: "Periode", Nilai: period ? monthLabel(period) : "Semua periode" },
           { Keterangan: "Tanggal pengesahan", Nilai: approvalDate ? longDateID(approvalDate) : "-" },
@@ -2045,7 +2083,7 @@ function RekapView({ db, user, refresh }) {
         XLSX.writeFile(book, `Rekap_Kelas_${safeExportName(validClass === "all" ? "semua_kelas" : className(db, validClass))}_${period || "semua_periode"}.xlsx`);
       } else {
         const { downloadStudentRecapPdf } = await import("./pdfExports.js");
-        await downloadStudentRecapPdf(studentRecaps, { periodLabel: period ? monthLabel(period) : "Semua periode", classLabel: validClass === "all" ? "Semua kelas" : className(db, validClass), approvalDate });
+        await downloadStudentRecapPdf(studentRecaps, { academicYearLabel: db.academicYear.nama, periodLabel: period ? monthLabel(period) : "Semua periode", classLabel: validClass === "all" ? "Semua kelas" : className(db, validClass), approvalDate });
       }
     } catch (error) { setExportError(error.message); }
     finally { setExporting(false); }
@@ -2054,7 +2092,7 @@ function RekapView({ db, user, refresh }) {
     <div>
        <SectionTitle sub={sub}>Rekap Kelas Bulanan</SectionTitle>
       <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-         <label>Bulan rekap<input className="t-input" type="month" value={period} disabled={approvalDateSaving} onChange={(e) => { if (e.target.value) setPeriod(e.target.value); }} /></label>
+         <label>Bulan rekap<input className="t-input" type="month" min={db.academicYear.startsOn.slice(0,7)} max={db.academicYear.endsOn.slice(0,7)} value={period} disabled={approvalDateSaving} onChange={(e) => { if (yearMonthOptions(db.academicYear).includes(e.target.value)) setPeriod(e.target.value); }} /></label>
          <button className="t-btn t-btn-primary" disabled={exporting || historyLoading || !!historyError || approvalDateLoading || approvalDateSaving || !!approvalDateError || approvalDateDirty || !approvalDate || !recapRows.length} onClick={() => exportRecap("xlsx")}><Download size={14} /> Unduh Excel Rekap Siswa</button>
          <button className="t-btn t-btn-ghost" disabled={exporting || historyLoading || !!historyError || approvalDateLoading || approvalDateSaving || !!approvalDateError || approvalDateDirty || !approvalDate || !recapRows.length} onClick={() => exportRecap("pdf")}><Download size={14} /> Unduh PDF Rekap Siswa</button>
       </div>
@@ -2064,9 +2102,9 @@ function RekapView({ db, user, refresh }) {
       <div className="t-card-soft" style={{padding:14,marginBottom:16}}>
         {user.role === "admin" ? <div style={{display:"flex",gap:10,alignItems:"end",flexWrap:"wrap"}}>
           <label style={{display:"grid",gap:6,fontSize:12}}>Tanggal pengesahan — {period ? monthLabel(period) : "Semua periode"}
-            <input className="t-input" type="date" value={approvalDate} disabled={!period || approvalDateLoading || approvalDateSaving} onChange={(e) => {setApprovalDate(e.target.value);setApprovalDateDirty(true);setApprovalDateMsg("");}} />
+            <input className="t-input" type="date" value={approvalDate} disabled={!period || approvalDateLoading || approvalDateSaving || !canWriteAcademicYear(db.academicYear)} onChange={(e) => {setApprovalDate(e.target.value);setApprovalDateDirty(true);setApprovalDateMsg("");}} />
           </label>
-          <button className="t-btn t-btn-primary" disabled={!period || approvalDateLoading || approvalDateSaving || !approvalDate} onClick={saveApprovalDate}>{approvalDateSaving ? "Menyimpan..." : "Simpan tanggal pengesahan"}</button>
+          <button className="t-btn t-btn-primary" disabled={!period || approvalDateLoading || approvalDateSaving || !approvalDate || !canWriteAcademicYear(db.academicYear)} onClick={saveApprovalDate}>{approvalDateSaving ? "Menyimpan..." : "Simpan tanggal pengesahan"}</button>
         </div> : <span>Tanggal pengesahan: {approvalDateLoading ? "Memuat..." : approvalDate ? longDateID(approvalDate) : "-"}. Diatur oleh admin.</span>}
         {approvalDateMsg && <p role="status" style={{margin:"8px 0 0",fontSize:12,color:approvalDateMsg.includes("gagal") || approvalDateMsg.includes("ditolak") ? "var(--red)" : "var(--teal)"}}>{approvalDateMsg}</p>}
         {approvalDateError && <p role="alert" style={{margin:"8px 0 0",fontSize:12,color:"var(--red)"}}>{approvalDateError}</p>}
@@ -2116,7 +2154,7 @@ function RekapView({ db, user, refresh }) {
             {rows.length ? rows.map((r) => (
               <tr key={r.id}>
                 {validStudent === "all" && <td style={{ fontWeight: 600 }}>{r._nama}</td>}
-                <td>{className(db, db.students.find(s => s.id === r.studentId)?.kelasId)}</td><td>{fmtDate(r.tanggal)}</td>
+                <td>{className(yearDb, r.classId)}</td><td>{fmtDate(r.tanggal)}</td>
                 <td>{surahName(db, r.surahId)}</td>
                 <td>{r.ayatMulai}-{r.ayatAkhir}</td>
                 <td className="font-mono" style={{ fontWeight: 700 }}>{r.nilaiHuruf || r.nilai}</td>
@@ -2222,6 +2260,7 @@ function ReportSheet({ db, student, mk, reportDate }) {
           <div><b>Nama</b> &nbsp;: {student.nama}</div>
           <div><b>NIS</b> &nbsp;&nbsp;&nbsp;: {student.nis}</div>
           <div><b>Kelas</b> &nbsp;: {className(db, student.kelasId)}</div>
+          <div><b>Tahun Pelajaran</b> : {db.academicYear.nama}</div>
           <div><b>Pengajar</b> : {teacher?.nama || "-"}</div>
           <div><b>Jenis Kelamin</b> : {student.jenisKelamin === "L" ? "Laki-laki" : student.jenisKelamin === "P" ? "Perempuan" : "-"}</div>
         </div>
@@ -2297,7 +2336,23 @@ function ReportSheet({ db, student, mk, reportDate }) {
   );
 }
 
-function ReportBulanan({ db, user }) {
+function ReportBulanan({ db: yearDb, user, refresh }) {
+  const [mk, setMk] = useState(academicMonth(yearDb));
+  const [classId, setClassId] = useState("");
+  const rosterDb = academicView(yearDb, { ...academicMonthRange(yearDb, mk), classId: classId || "all" });
+  const comparisonDb = academicView(yearDb, { fromDate: `${prevMonthKey(mk)}-01`, toDate: academicMonthRange(yearDb, mk).toDate, classId: classId || "all" });
+  const db = { ...rosterDb, scores: comparisonDb.scores, attendance: comparisonDb.attendance };
+  const [historyState, setHistoryState] = useState({ loading: true, error: "" });
+  const [reload, setReload] = useState(0);
+  useEffect(() => {
+    let cancelled = false;
+    setHistoryState({ loading: true, error: "" });
+    const months = [mk];
+    if (yearMonthOptions(yearDb.academicYear).includes(prevMonthKey(mk))) months.push(prevMonthKey(mk));
+    Promise.all(months.map((month) => refresh({ activityMonth: month }))).then(() => { if (!cancelled) setHistoryState({ loading: false, error: "" }); })
+      .catch((error) => { if (!cancelled) setHistoryState({ loading: false, error: error.message }); });
+    return () => { cancelled = true; };
+  }, [mk, reload]);
   let students = [];
   let sub = "";
   if (user.role === "admin") { students = db.students; sub = "Seluruh siswa"; }
@@ -2307,12 +2362,12 @@ function ReportBulanan({ db, user }) {
   }
   if (user.role === "mentor") { students = mentorStudents(db, user.refId); sub = "Siswa binaan Anda"; }
 
-  const [mk, setMk] = useState(currentMonthKey());
-  const [classId, setClassId] = useState("");
   const [studentId, setStudentId] = useState("all");
-  const availableClasses = db.classes.filter(c =>
+  const monthMembers = academicView(yearDb, academicMonthRange(yearDb, mk));
+  const optionStudents = user.role === "mentor" ? mentorStudents(monthMembers, user.refId) : monthMembers.students;
+  const availableClasses = yearDb.classes.filter(c =>
     user.role === "admin" || (user.role === "pengajar" && c.teacherId === user.refId) ||
-    (user.role === "mentor" && students.some(s => s.kelasId === c.id))
+    (user.role === "mentor" && optionStudents.some(s => s.academicEnrollments?.some((e) => e.classId === c.id)))
   ).sort((a,b) => a.nama.localeCompare(b.nama,"id",{numeric:true}));
   const validClassId = availableClasses.some(c => c.id === classId) ? classId : "";
   const classStudents = students.filter(s => validClassId && s.kelasId === validClassId)
@@ -2341,7 +2396,7 @@ function ReportBulanan({ db, user }) {
     } catch (error) { setDateError(error.message); }
     finally { setDateSaving(false); }
   }
-  function handleDownload() { if (!dateLoading && !dateError && !dateDirty) window.print(); }
+  function handleDownload() { if (!dateLoading && !dateError && !dateDirty && !historyState.loading && !historyState.error) window.print(); }
 
   const selected = validStudentId === "all" ? classStudents : classStudents.filter((s) => s.id === validStudentId);
 
@@ -2361,23 +2416,26 @@ function ReportBulanan({ db, user }) {
             {classStudents.map(s => <option key={s.id} value={s.id}>{s.nama}</option>)}
           </select>
         </label>
-        <input aria-label="Bulan laporan" type="month" className="t-input" style={{ width: 180 }} value={mk} disabled={dateSaving} onChange={(e) => { if (e.target.value) setMk(e.target.value); }} />
-        <button className="t-btn t-btn-gold" onClick={handleDownload} disabled={dateLoading || dateSaving || !!dateError || dateDirty || !selected.length}>
+        <input aria-label="Bulan laporan" type="month" min={db.academicYear.startsOn.slice(0,7)} max={db.academicYear.endsOn.slice(0,7)} className="t-input" style={{ width: 180 }} value={mk} disabled={dateSaving} onChange={(e) => { if (yearMonthOptions(db.academicYear).includes(e.target.value)) setMk(e.target.value); }} />
+        <button className="t-btn t-btn-gold" onClick={handleDownload} disabled={dateLoading || dateSaving || !!dateError || dateDirty || historyState.loading || !!historyState.error || !selected.length}>
           <FileText size={15} /> Unduh PDF
         </button>
         <span style={{ fontSize: 11.5, color: "#8A8064" }}>Pada dialog cetak, pilih tujuan &ldquo;Save as PDF&rdquo;.</span>
       </div>
 
+      {historyState.loading && <p role="status">Memuat kegiatan bulan laporan...</p>}
+      {historyState.error && <p role="alert">Data laporan belum lengkap: {historyState.error} <button className="t-btn" onClick={() => setReload((v) => v + 1)}>Muat ulang</button></p>}
+
       <div className="no-print t-card-soft" style={{padding:14,marginBottom:16}}>
         {user.role === "admin" ? <div style={{display:"flex",gap:10,alignItems:"end",flexWrap:"wrap"}}>
-          <label>Tanggal pengesahan — {monthLabel(mk)}<input className="t-input" type="date" value={reportDate} disabled={dateLoading || dateSaving} onChange={(e) => {setReportDate(e.target.value);setDateDirty(true);setDateMsg("");}} /></label>
-          <button className="t-btn t-btn-primary" disabled={dateLoading || dateSaving || !reportDate} onClick={saveDate}>{dateSaving ? "Menyimpan..." : "Simpan tanggal bulan ini"}</button>
+          <label>Tanggal pengesahan — {monthLabel(mk)}<input className="t-input" type="date" value={reportDate} disabled={dateLoading || dateSaving || !canWriteAcademicYear(db.academicYear)} onChange={(e) => {setReportDate(e.target.value);setDateDirty(true);setDateMsg("");}} /></label>
+          <button className="t-btn t-btn-primary" disabled={dateLoading || dateSaving || !reportDate || !canWriteAcademicYear(db.academicYear)} onClick={saveDate}>{dateSaving ? "Menyimpan..." : "Simpan tanggal bulan ini"}</button>
         </div> : <span>Tanggal pengesahan: {dateLoading ? "Memuat..." : dateError ? "Tidak tersedia" : longDateID(reportDate)}. Diatur oleh admin.</span>}
         {dateDirty && <p>Simpan tanggal sebelum mencetak laporan.</p>}
         {dateError && <p role="alert" style={{color:"var(--red)"}}>{dateError}</p>}
         {dateMsg && <p role="status">{dateMsg}</p>}
       </div>
-      {!dateLoading && !dateError && selected.length ? (
+      {!dateLoading && !dateError && !historyState.loading && !historyState.error && selected.length ? (
         <div className="print-area">
           {selected.map((s) => <ReportSheet key={s.id} db={db} student={s} mk={mk} reportDate={reportDate || defaultReportDate(mk)} />)}
         </div>
@@ -2388,6 +2446,8 @@ function ReportBulanan({ db, user }) {
 
 /* ============================== ADMIN: MASTER DATA ============================== */
 function MasterData({ db, refresh }) {
+  const [placementDate, setPlacementDate] = useState(academicDate(db));
+  const placementContext = { yearId: db.academicYear.id, effectiveDate: placementDate };
   const [tab, setTab] = useState("siswa");
   const [form, setForm] = useState({ nama: "", nis: "", kelasId: db.classes[0]?.id, jenisKelamin: "L" });
   const [newClass, setNewClass] = useState({ nama: "", teacherId: "" });
@@ -2403,7 +2463,7 @@ function MasterData({ db, refresh }) {
     if (!form.nama.trim() || !form.nis.trim()) return;
     setBusy(true);
     try {
-      await insertStudent({ nis: form.nis, nama: form.nama, kelasId: form.kelasId, jenisKelamin: form.jenisKelamin });
+      await insertStudent({ nis: form.nis, nama: form.nama, kelasId: form.kelasId, jenisKelamin: form.jenisKelamin }, placementContext);
       await refresh();
       setForm({ ...form, nama: "", nis: "" });
     } catch (e) {
@@ -2426,7 +2486,7 @@ function MasterData({ db, refresh }) {
     if (!newClass.nama.trim()) return;
     setBusy(true);
     try {
-      await insertClass(newClass.nama, newClass.teacherId || null);
+      await insertClass(newClass.nama, newClass.teacherId || null, db.academicYear.id);
       await refresh();
       setNewClass({ nama: "", teacherId: "" });
     } catch (e) {
@@ -2458,7 +2518,7 @@ function MasterData({ db, refresh }) {
   async function handleChangeClass(studentId, kelasId) {
     setRowBusyId(studentId);
     try {
-      await updateStudentClass(studentId, kelasId);
+      await updateStudentClass(studentId, kelasId, placementContext);
       await refresh();
     } catch (e) {
       alert("Gagal memindahkan kelas: " + e.message);
@@ -2476,7 +2536,7 @@ function MasterData({ db, refresh }) {
     if (!selectedIds.length) return;
     setBusy(true);
     try {
-      await bulkUpdateStudentClass(selectedIds, bulkKelasId);
+      await bulkUpdateStudentClass(selectedIds, bulkKelasId, placementContext);
       await refresh();
       setSelectedIds([]);
     } catch (e) {
@@ -2564,7 +2624,7 @@ function MasterData({ db, refresh }) {
         const existing = db.students.find(s => String(s.nis).trim() === String(row.nis).trim());
         let kelasObj = null;
         if (row.kelas) {
-          kelasObj = await findOrCreateClassByName(row.kelas, classes);
+          kelasObj = await findOrCreateClassByName(row.kelas, classes, db.academicYear.id);
           if (!classes.some((c) => c.id === kelasObj.id)) classes = [...classes, kelasObj];
         }
         rows.push({
@@ -2574,7 +2634,7 @@ function MasterData({ db, refresh }) {
           kelasId: kelasObj ? kelasObj.id : (existing?.kelasId || null),
         });
       }
-      await bulkUpsertStudents(rows);
+      await bulkUpsertStudents(rows, placementContext);
       await refresh();
       setImportMsg(`${rows.length} data peserta berhasil diproses. NIS yang sudah ada diperbarui, NIS baru ditambahkan. Riwayat presensi, penilaian, dan agama tetap dipertahankan.`);
       setPreview([]);
@@ -2596,7 +2656,8 @@ function MasterData({ db, refresh }) {
 
   return (
     <div>
-      <SectionTitle sub="Kelola data induk: siswa dan kelas. Setiap kelas ditugaskan ke satu pengajar.">Master Data</SectionTitle>
+      <SectionTitle sub={`Kelola data siswa dan kelas tahun pelajaran ${db.academicYear.nama}.`}>Master Data</SectionTitle>
+      <div className="ay-notice"><label>Tanggal berlaku penempatan dan impor siswa <input type="date" className="t-input" style={{maxWidth:220}} min={db.academicYear.startsOn} max={db.academicYear.endsOn} value={placementDate} disabled={busy || db.academicYear.status === "archived"} onChange={(e) => setPlacementDate(e.target.value)} /></label><p>Perubahan kelas dicatat sebagai riwayat mulai tanggal ini. Untuk kenaikan kelas, lulus, atau mutasi gunakan menu Tahun Pelajaran.</p></div>
       <div style={{ display: "flex", gap: 8, marginBottom: 16 }}>
         {["siswa", "kelas"].map((t) => (
           <button key={t} className="t-btn" style={{ background: tab === t ? "var(--ink)" : "var(--panel-soft)", color: tab === t ? "white" : "var(--ink)" }} onClick={() => setTab(t)}>
@@ -2675,9 +2736,7 @@ function MasterData({ db, refresh }) {
                 <button className="t-btn t-btn-gold" onClick={bulkMove} disabled={busy}>
                   {busy ? "Memindahkan..." : "Pindahkan ke Kelas Ini"}
                 </button>
-                <button className="t-btn t-btn-danger" onClick={bulkDelete} disabled={busy}>
-                  <Trash2 size={13} /> {busy ? "Menghapus..." : "Hapus Terpilih"}
-                </button>
+                <span style={{fontSize:12}}>Kelulusan dan mutasi dicatat melalui menu Tahun Pelajaran.</span>
                 <button className="t-btn t-btn-ghost" onClick={() => setSelectedIds([])}>Batal Pilih</button>
               </div>
             )}
@@ -2709,7 +2768,7 @@ function MasterData({ db, refresh }) {
                           {db.classes.map((c) => <option key={c.id} value={c.id}>{c.nama}</option>)}
                         </select>
                       </td>
-                      <td><button className="t-btn t-btn-danger" style={{ padding: "5px 8px" }} onClick={() => removeStudent(s.id)}><Trash2 size={13} /></button></td>
+                      <td><span style={{fontSize:11}}>Riwayat dipertahankan</span></td>
                     </tr>
                   ))}
                 </tbody>
@@ -2752,7 +2811,7 @@ function MasterData({ db, refresh }) {
                       </select>
                     </td>
                     <td>{db.students.filter((s) => s.kelasId === c.id).length}</td>
-                    <td><button className="t-btn t-btn-danger" style={{ padding: "5px 8px" }} onClick={() => removeClass(c.id)}><Trash2 size={13} /></button></td>
+                    <td><span style={{fontSize:11}}>Kelola di Tahun Pelajaran</span></td>
                   </tr>
                 ))}
               </tbody>
@@ -2912,7 +2971,7 @@ function ManajemenUser({ db, refresh, user }) {
 
 /* ============================== ADMIN: MONITORING ============================== */
 function Monitoring({ db }) {
-  const mk = currentMonthKey();
+  const mk = academicMonth(db);
   const rows = db.classes.map((c) => {
     const members = db.students.filter((s) => s.kelasId === c.id);
     const ids = members.map((m) => m.id);
@@ -2967,6 +3026,8 @@ function Monitoring({ db }) {
 /* ============================== APP ROOT ============================== */
 export default function TahfidzApp() {
   const [db, setDb] = useState(null);
+  const [selectedYearId, setSelectedYearId] = useState("");
+  const [yearActivity, setYearActivity] = useState({ id: "", loading: false, error: "" });
   const [profile, setProfile] = useState(null);
   const [loading, setLoading] = useState(true);
   const [authError, setAuthError] = useState("");
@@ -2978,6 +3039,7 @@ export default function TahfidzApp() {
   const activityRequestVersionRef = useRef(0);
   const activityMonthRequestsRef = useRef(new Map());
   const latestActivitySyncRef = useRef(0);
+  const activityYearRequestsRef = useRef(new Map());
 
   async function syncActivity(cacheKey) {
     const requestVersion = ++activityRequestVersionRef.current;
@@ -2992,7 +3054,7 @@ export default function TahfidzApp() {
         const range = { fromDate: activity.fromDate, toDate: activity.toDate, preserveMonths };
         const next = { ...prev, attendance: replaceActivityRange(prev.attendance, activity.attendance, range), scores: replaceActivityRange(prev.scores, activity.scores, range) };
         if (cacheKey) {
-          try { sessionStorage.setItem(`saqu-db-cache:${cacheKey}`, JSON.stringify({ savedAt: Date.now(), data: next })); } catch { /* cache is optional */ }
+          try { sessionStorage.setItem(`saqu-db-cache:academic-v1:${cacheKey}`, JSON.stringify({ savedAt: Date.now(), data: next })); } catch { /* cache is optional */ }
         }
         return next;
       });
@@ -3007,10 +3069,27 @@ export default function TahfidzApp() {
   }
 
   async function refresh(options) {
+    const refreshSessionKey = sessionHandledRef.current;
+    if (options?.activityYear) {
+      const year = options.activityYear;
+      const requestVersion = ++activityRequestVersionRef.current;
+      activityYearRequestsRef.current.set(year.id, requestVersion);
+      latestActivitySyncRef.current = 0;
+      const sessionKey = sessionHandledRef.current;
+      const activity = await fetchActivityData({ fromDate: year.startsOn, toDate: year.endsOn });
+      if (sessionHandledRef.current !== sessionKey || activityYearRequestsRef.current.get(year.id) !== requestVersion) return;
+      setDb((prev) => prev ? { ...prev,
+        attendance: replaceActivityRange(prev.attendance, activity.attendance, { fromDate: year.startsOn, toDate: year.endsOn, preserveMonths: [...activityMonthRequestsRef.current].filter(([,v]) => v > requestVersion).map(([month]) => month) }),
+        scores: replaceActivityRange(prev.scores, activity.scores, { fromDate: year.startsOn, toDate: year.endsOn, preserveMonths: [...activityMonthRequestsRef.current].filter(([,v]) => v > requestVersion).map(([month]) => month) }),
+      } : prev);
+      return activity;
+    }
     if (options?.attendanceFor) {
+      activityYearRequestsRef.current.clear();
       latestActivitySyncRef.current = 0;
       const {studentIds, date} = options.attendanceFor;
       const attendance = await fetchAttendanceForDate(studentIds, date);
+      if (sessionHandledRef.current !== refreshSessionKey) return;
       const ids = new Set(studentIds || []);
       setDb((prev) => prev ? { ...prev, attendance: [...prev.attendance.filter((row) => !(ids.has(row.studentId) && row.tanggal === date)), ...attendance] } : prev);
       return;
@@ -3034,26 +3113,44 @@ export default function TahfidzApp() {
       return activity;
     }
     if (options?.scoresForMany?.length) {
+      activityYearRequestsRef.current.clear();
       latestActivitySyncRef.current = 0;
       const studentIds = [...new Set(options.scoresForMany.filter(Boolean))];
       const scores = await fetchScoresForStudents(studentIds);
+      if (sessionHandledRef.current !== refreshSessionKey) return;
       setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => !studentIds.includes(s.studentId)), ...scores] } : prev);
       return;
     }
     if (options?.scoresFor) {
+      activityYearRequestsRef.current.clear();
       latestActivitySyncRef.current = 0;
       const scores = await fetchStudentScores(options.scoresFor);
+      if (sessionHandledRef.current !== refreshSessionKey) return;
       setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => s.studentId !== options.scoresFor), ...scores] } : prev);
       return;
     }
     try {
+      activityYearRequestsRef.current.clear();
       latestActivitySyncRef.current = 0;
-      const data = await fetchAllData({ includeActivity: !options?.initial });
-      setDb(data);
-      if (options?.cacheKey) {
-        try { sessionStorage.setItem(`saqu-db-cache:${options.cacheKey}`, JSON.stringify({ savedAt: Date.now(), data })); } catch { /* cache is optional */ }
+      const data = await fetchAllData({ includeActivity: false });
+      let loadedYear = null;
+      if (!options?.initial) {
+        const requestedYear = selectedAcademicYear(data, selectedYearId);
+        if (requestedYear) {
+          loadedYear = requestedYear;
+          const activity = await fetchActivityData({ fromDate: requestedYear.startsOn, toDate: requestedYear.endsOn });
+          data.attendance = activity.attendance;
+          data.scores = activity.scores;
+        }
       }
-      if (options?.initial) syncActivity(options.cacheKey).catch(() => {});
+      if (sessionHandledRef.current !== refreshSessionKey) return;
+      setDb((previous) => loadedYear && previous ? { ...data,
+        attendance: replaceActivityRange(previous.attendance, data.attendance, { fromDate: loadedYear.startsOn, toDate: loadedYear.endsOn }),
+        scores: replaceActivityRange(previous.scores, data.scores, { fromDate: loadedYear.startsOn, toDate: loadedYear.endsOn }),
+      } : data);
+      if (options?.cacheKey) {
+        try { sessionStorage.setItem(`saqu-db-cache:academic-v1:${options.cacheKey}`, JSON.stringify({ savedAt: Date.now(), data })); } catch { /* cache is optional */ }
+      }
       return data;
     } catch (e) {
       console.error("Gagal memuat data:", e);
@@ -3066,6 +3163,7 @@ export default function TahfidzApp() {
     if (sessionHandledRef.current === sessionKey) return;
     sessionHandledRef.current = sessionKey;
     if (!session) {
+      setSelectedYearId("");
       setProfile(null);
       setDb(null);
       setActivityWarning("");
@@ -3088,6 +3186,7 @@ export default function TahfidzApp() {
       return;
     }
 
+    if (sessionHandledRef.current !== sessionKey) return;
     if (error || !prof) {
       setAuthError("Akun ini belum terhubung ke profil peran. Hubungi Admin untuk menyelesaikan setup akun.");
       await supabase.auth.signOut();
@@ -3105,21 +3204,8 @@ export default function TahfidzApp() {
     setAuthError("");
     setActivityWarning("");
     setProfile({ id: prof.id, nama: prof.nama, role: prof.role, refId: prof.ref_id, status: prof.status });
-    let cached = null;
-    try {
-      const raw = sessionStorage.getItem(`saqu-db-cache:${prof.id}`);
-      if (raw) {
-        const parsed = JSON.parse(raw);
-        if (parsed?.data && Date.now() - Number(parsed.savedAt || 0) < 15 * 60 * 1000) cached = parsed.data;
-      }
-    } catch { /* ignore unavailable/corrupt cache */ }
-    if (cached) {
-      setDb(cached);
-      setLoading(false);
-      // Tampilkan cache segera, lalu sinkronkan data terbaru tanpa memblokir layar.
-      syncActivity(prof.id).catch(e => console.warn("Sinkronisasi data berjalan di latar belakang:", e));
-      return;
-    }
+    // Tahun aktif dan penempatan selalu dibaca ulang saat login; cache lama
+    // tidak boleh mempertahankan izin/kelas yang telah berubah.
     try { await refresh({cacheKey: prof.id, initial: true}); }
     catch (e) { setAuthError("Data aplikasi gagal dimuat: " + e.message); setProfile(null); setDb(null); }
     finally { setLoading(false); }
@@ -3151,6 +3237,7 @@ export default function TahfidzApp() {
     // handleSession dipanggil otomatis lewat onAuthStateChange
   }
   async function handleLogout() {
+    try { sessionStorage.removeItem(`saqu-db-cache:academic-v1:${profile?.id}`); } catch { /* storage optional */ }
     const { error } = await supabase.auth.signOut();
     if (error) throw error;
     setView("dashboard");
@@ -3163,6 +3250,19 @@ export default function TahfidzApp() {
     sessionHandledRef.current = "";
     await handleSession(session);
   }
+
+  const year = selectedAcademicYear(db || {}, selectedYearId);
+  useEffect(() => {
+    if (!year || !profile) return;
+    let cancelled = false;
+    setYearActivity({ id: year.id, loading: true, error: "" });
+    refresh({ activityYear: year }).then(() => {
+      if (!cancelled) setYearActivity({ id: year.id, loading: false, error: "" });
+    }).catch((error) => {
+      if (!cancelled) setYearActivity({ id: year.id, loading: false, error: error.message });
+    });
+    return () => { cancelled = true; };
+  }, [year?.id, profile?.id]);
 
   if (recoveryMode) {
     return <ResetPasswordScreen onDone={handleRecoveryDone} />;
@@ -3194,7 +3294,8 @@ export default function TahfidzApp() {
   }
 
   const user = profile;
-  const activityDb = tahfidzData(db);
+  const yearDb = { ...projectAcademicData(db, year?.id), rawAcademicDb: db };
+  const activityDb = tahfidzData(yearDb);
 
   let content = null;
   if (view === "dashboard") {
@@ -3202,8 +3303,10 @@ export default function TahfidzApp() {
     if (user.role === "pengajar") content = <DashboardPengajar db={activityDb} user={user} />;
     if (user.role === "mentor") content = <DashboardMentor db={activityDb} user={user} />;
     if (user.role === "siswa") content = <DashboardSiswa db={activityDb} user={user} />;
+  } else if (view === "academic-years" && user.role === "admin") {
+    content = <Suspense fallback={<p role="status">Memuat pengaturan tahun pelajaran...</p>}><AcademicYearPanel db={db} user={user} selectedYearId={year?.id} onYearChange={setSelectedYearId} refresh={refresh} /></Suspense>;
   } else if (view === "teacher-attendance" && user.role === "admin") {
-    content = <TeacherAttendanceAdmin db={db} />;
+    content = <TeacherAttendanceAdmin db={yearDb} />;
   } else if (view === "presensi") {
     content = user.role === "pengajar" ? <PresensiHarian db={activityDb} refresh={refresh} user={user} /> : <PresensiSiswa db={activityDb} user={user} />;
   } else if (view === "penilaian") {
@@ -3211,17 +3314,17 @@ export default function TahfidzApp() {
   } else if (view === "rekap") {
     content = <RekapView db={activityDb} user={user} refresh={refresh} />;
   } else if (view === "jurnal" && user.role === "pengajar") {
-    content = <JurnalMengajarPengajar db={db} user={user} />;
+    content = <JurnalMengajarPengajar db={yearDb} user={user} />;
   } else if (view === "jurnal-admin" && user.role === "admin") {
-    content = <JurnalMengajarAdmin db={db} />;
+    content = <JurnalMengajarAdmin db={yearDb} />;
   } else if (view === "master") {
-    content = <MasterData db={db} refresh={refresh} />;
+    content = <MasterData db={yearDb} refresh={refresh} />;
   } else if (view === "userman") {
     content = <ManajemenUser db={db} refresh={refresh} user={user} />;
   } else if (view === "monitoring") {
     content = <Monitoring db={activityDb} />;
   } else if (view === "report") {
-    content = <ReportBulanan db={activityDb} user={user} />;
+    content = <ReportBulanan db={activityDb} user={user} refresh={refresh} />;
   } else if (view === "profil") {
     content = <ProfilSaya db={db} refresh={refresh} user={user} />;
   } else if (view === "password") {
@@ -3237,13 +3340,26 @@ export default function TahfidzApp() {
       <div style={{ display: "flex", flex: 1 }}>
         <Sidebar user={user} view={view} setView={setView} mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
         <div className="app-content" style={{ flex: 1, padding: 28, maxWidth: 1180, minWidth: 0 }}>
+          <div className="no-print ay-global-bar">
+            <AcademicYearSelector years={db.academicYears} value={year?.id || ""} onChange={setSelectedYearId} />
+            <span>{year?.status === "active" ? "Tahun aktif" : year?.status === "draft" ? "Persiapan tahun baru" : "Arsip · hanya baca"}</span>
+            {user.role === "admin" && <button className="t-btn t-btn-ghost" onClick={() => setView("academic-years")}>Kelola tahun pelajaran</button>}
+          </div>
+          {year?.legacyReviewPending && user.role === "admin" && <div className="ay-notice" role="status">Pemetaan awal 2026/2027 mengikuti kelas saat pembaruan. Periksa dan konfirmasikan di menu Tahun Pelajaran. Riwayat pindah kelas sebelumnya perlu diperiksa.</div>}
           {activityWarning && (
             <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#FFF4D6", color: "#7A5E32", fontSize: 13, fontWeight: 600 }}>
               <span>{activityWarning}</span>
               <button className="t-btn t-btn-ghost" type="button" onClick={() => syncActivity(user.id).catch(() => {})}>Coba lagi</button>
             </div>
           )}
-          {content}
+          {view === "dashboard" && yearActivity.id === year?.id && yearActivity.loading && <p role="status">Memuat aktivitas tahun pelajaran {year.nama}...</p>}
+          {yearActivity.id === year?.id && yearActivity.error && <div className="ay-notice" role="alert">Aktivitas tahun ini belum lengkap: {yearActivity.error} <button className="t-btn" onClick={() => refresh({ activityYear: year }).then(() => setYearActivity({id:year.id,loading:false,error:""})).catch((error) => setYearActivity({id:year.id,loading:false,error:error.message}))}>Muat ulang</button></div>}
+          <div key={`${view}:${year?.id}`}>
+            {!canWriteAcademicYear(year) && ["presensi", "penilaian", "teacher-attendance"].includes(view) && <p className="ay-notice">Tahun ini hanya dapat dilihat. Input kegiatan dibuka pada tahun pelajaran aktif.</p>}
+            <fieldset disabled={(year?.status === "archived" && view === "master") || ((yearActivity.id !== year?.id || yearActivity.loading || !!yearActivity.error) && ["presensi", "penilaian"].includes(view))} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+              {content}
+            </fieldset>
+          </div>
         </div>
       </div>
     </div>

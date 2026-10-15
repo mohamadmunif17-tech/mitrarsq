@@ -5,7 +5,7 @@ export function buildStudentRecap({ students, scores, attendance, classes, surah
   const surahNames = new Map(surahs.map((item) => [item.id, item.nama]));
   const groups = new Map(students.map((student) => [student.id, {
     studentId: student.id, nama: student.nama, nis: student.nis || "-",
-    kelas: classNames.get(student.kelasId) || "-",
+    kelas: student.academicClassLabel || classNames.get(student.kelasId) || "-",
     counts: { HADIR: 0, SAKIT: 0, IZIN: 0, ALPHA: 0 },
     attendanceCount: 0, scores: [], totalAyat: 0, numericScores: [],
   }]));

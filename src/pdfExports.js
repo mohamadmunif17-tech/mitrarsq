@@ -125,8 +125,9 @@ export async function downloadRecapPdf(rows, label) {
   saveBlob(await buildRecapPdf(rows, label), `Rekap_Tahfidz_${safeFilename(label)}.pdf`, "application/pdf");
 }
 
-export async function buildStudentRecapPdf(rows, { periodLabel, classLabel, approvalDate }) {
+export async function buildStudentRecapPdf(rows, { periodLabel, classLabel, approvalDate, academicYearLabel }) {
   const w = await writer("REKAP KELAS PER SISWA", "SAQUIN — Sahabat Quran Indonesia");
+  if (academicYearLabel) w.field("Tahun pelajaran", academicYearLabel);
   w.field("Kelas", classLabel);
   w.field("Bulan", periodLabel);
   w.field("Tanggal pengesahan", approvalDate ? longDateID(approvalDate) : "-");
@@ -149,8 +150,9 @@ export async function downloadStudentRecapPdf(rows, options) {
   saveBlob(await buildStudentRecapPdf(rows, options), `Rekap_Kelas_${safeFilename(options.classLabel)}_${safeFilename(options.periodLabel)}.pdf`, "application/pdf");
 }
 
-export async function buildJournalPdf(rows, { periodLabel, classLabel, teacherLabel }) {
+export async function buildJournalPdf(rows, { periodLabel, classLabel, teacherLabel, academicYearLabel }) {
   const w = await writer("JURNAL MENGAJAR", "SAQUIN — Sahabat Quran Indonesia");
+  if (academicYearLabel) w.field("Tahun pelajaran", academicYearLabel);
   w.field("Bulan", periodLabel);
   w.field("Kelas", classLabel);
   w.field("Pengajar", teacherLabel);

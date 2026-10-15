@@ -2,23 +2,30 @@ import { useEffect, useMemo, useState } from "react";
 import { RefreshCw } from "lucide-react";
 import { fetchTeacherAttendance } from "./db.js";
 import { attendanceSummary, localDate, monthBounds } from "./teacherAttendanceModel.js";
+import { yearMonthOptions } from "./academicYearModel.js";
 
 export default function TeacherAttendanceRecap({ db, revision = 0 }) {
-  const [month, setMonth] = useState(localDate().slice(0,7));
+  const year = db.academicYear;
+  const months = yearMonthOptions(year);
+  const [month, setMonth] = useState(() => months.includes(localDate().slice(0, 7)) ? localDate().slice(0, 7) : months[0] || "");
   const [search, setSearch] = useState("");
   const [reload, setReload] = useState(0);
   const [state, setState] = useState({rows:[],loading:true,error:"",key:""});
-  const key = `${month}:${revision}:${reload}`;
+  const key = `${year?.id}:${month}:${revision}:${reload}`;
   useEffect(() => {
     let cancelled = false;
     setState({rows:[],loading:true,error:"",key});
+    if (!months.includes(month)) {
+      setState({rows:[],loading:false,error:"Pilih bulan dalam tahun pelajaran yang dipilih.",key});
+      return () => { cancelled = true; };
+    }
     fetchTeacherAttendance(monthBounds(month)).then(rows => {
       if (!cancelled) setState({rows,loading:false,error:"",key});
     }).catch(e => {
       if (!cancelled) setState({rows:[],loading:false,error:e.message,key});
     });
     return () => { cancelled = true; };
-  }, [month, revision, reload]);
+  }, [month, revision, reload, year?.id]);
   const rows = useMemo(() => {
     const grouped = new Map();
     state.rows.forEach(row => {
@@ -34,10 +41,10 @@ export default function TeacherAttendanceRecap({ db, revision = 0 }) {
   const pending = state.loading || state.key !== key;
   return <section className="t-card teacher-attendance" style={{marginTop:24}}>
     <div className="ta-heading">
-      <div><h3>Rekap Kehadiran Pengajar</h3><p>Ringkasan bulanan seluruh pengajar</p></div>
+      <div><h3>Rekap Kehadiran Pengajar</h3><p>Ringkasan bulanan seluruh pengajar · {year?.nama || "Pilih tahun pelajaran"}</p></div>
       <div className="ta-actions">
         <label style={{display:"grid",gap:6,fontSize:12}}>Bulan rekap pengajar
-          <input type="month" className="t-input" value={month} onChange={e => {if(e.target.value) setMonth(e.target.value);}} />
+          <input type="month" className="t-input" min={months[0]} max={months[months.length - 1]} value={month} onChange={e => {if(months.includes(e.target.value)) setMonth(e.target.value);}} />
         </label>
         <button type="button" className="t-btn t-btn-ghost" aria-label="Muat ulang rekap pengajar" disabled={pending} onClick={() => setReload(n => n+1)}><RefreshCw size={15}/></button>
       </div>

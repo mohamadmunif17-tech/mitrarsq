@@ -1,6 +1,7 @@
 import { isTahfidzStudent } from "./studentEligibility.js";
 import { TEACHER_STATUSES, validDate } from "./teacherAttendanceModel.js";
 import { supabase, SUPABASE_URL } from "./supabaseClient.js";
+import { fetchAcademicData, createAcademicClass, updateAcademicClass, placeAcademicStudents, importAcademicStudents } from "./academicYearApi.js";
 
 const DB_REQUEST_TIMEOUT_MS = 20000;
 
@@ -31,18 +32,18 @@ function defaultActivityFromDate() {
 
 async function fetchRows(table, options = {}) {
   const columns = {
-    classes: "id,nama,teacher_id",
+    classes: "id,nama,teacher_id,academic_year_id,tingkat,jurusan,rombel",
     teachers: "id,nama,foto_url,no_hp,pendidikan_terakhir,alamat,nama_panggilan,nik,tempat_lahir,tanggal_lahir,agama,status_pernikahan,kota,provinsi",
     mentors: "id,nama",
     students: "id,nis,nama,jenis_kelamin,kelas_id,agama",
     mentor_assignments: "id,mentor_id,student_id",
     surahs: "id,nama,jumlah_ayat,juz",
-    attendance: "id,student_id,tanggal,status,note,input_by",
-    scores: "id,student_id,tanggal,surah_id,ayat_mulai,ayat_akhir,nilai,nilai_huruf,catatan,penguji,input_by",
+    attendance: "id,student_id,tanggal,status,note,input_by,academic_year_id,class_id,enrollment_id",
+    scores: "id,student_id,tanggal,surah_id,ayat_mulai,ayat_akhir,nilai,nilai_huruf,catatan,penguji,input_by,academic_year_id,class_id,enrollment_id",
     profiles: "id,nama,role,ref_id,status,signature_url",
     certifications: "id,teacher_id,nama_sertifikasi,penyelenggara,tahun,file_url",
     riwayat_pendidikan: "id,teacher_id,jenjang,institusi,jurusan,tahun_lulus",
-    teacher_journals: "id,teacher_id,class_id,tanggal,materi,kegiatan,hasil,catatan,input_by,created_at",
+    teacher_journals: "id,teacher_id,class_id,tanggal,materi,kegiatan,hasil,catatan,input_by,created_at,academic_year_id",
   };
   const data = [];
   const activityTable = table === "attendance" || table === "scores" || table === "teacher_journals";
@@ -69,6 +70,7 @@ async function fetchRows(table, options = {}) {
 
 /* ---------- FETCH SEMUA DATA (dipanggil ulang setelah tiap mutasi) ---------- */
 export async function fetchAllData({ includeActivity = true, activityFromDate = defaultActivityFromDate() } = {}) {
+  const academic = await fetchAcademicData();
   const [classes, teachers, mentors, students, mentorAssignments, surahs, attendance, scores, profiles, certifications, riwayatPendidikan, schoolSettings] =
     await Promise.all([
       fetchRows("classes"),
@@ -86,7 +88,9 @@ export async function fetchAllData({ includeActivity = true, activityFromDate = 
     ]);
 
   return {
-    classes: mustOk(classes, "classes").map((c) => ({ id: c.id, nama: c.nama, teacherId: c.teacher_id })),
+    academicYears: academic.years, enrollments: academic.enrollments,
+    academicUnmapped: academic.legacySummary,
+    classes: mustOk(classes, "classes").map((c) => ({ id: c.id, nama: c.nama, teacherId: c.teacher_id, academicYearId: c.academic_year_id, tingkat: c.tingkat || "", jurusan: c.jurusan || "", rombel: c.rombel || "" })),
     teachers: mustOk(teachers, "teachers").map((t) => ({
       id: t.id, nama: t.nama, fotoUrl: t.foto_url, noHp: t.no_hp,
       pendidikanTerakhir: t.pendidikan_terakhir, alamat: t.alamat,
@@ -103,10 +107,10 @@ export async function fetchAllData({ includeActivity = true, activityFromDate = 
     })),
     surahs: mustOk(surahs, "surahs").map((s) => ({ id: s.id, nama: s.nama, ayat: s.jumlah_ayat, juz: s.juz })),
     attendance: mustOk(attendance, "attendance").map((a) => ({
-      id: a.id, studentId: a.student_id, tanggal: a.tanggal, status: a.status, note: a.note || "", inputBy: a.input_by,
+      ...activityContext(a), id: a.id, studentId: a.student_id, tanggal: a.tanggal, status: a.status, note: a.note || "", inputBy: a.input_by,
     })),
     scores: mustOk(scores, "scores").map((s) => ({
-      id: s.id, studentId: s.student_id, tanggal: s.tanggal, surahId: s.surah_id,
+      ...activityContext(s), id: s.id, studentId: s.student_id, tanggal: s.tanggal, surahId: s.surah_id,
       ayatMulai: s.ayat_mulai, ayatAkhir: s.ayat_akhir, nilai: s.nilai, nilaiHuruf: s.nilai_huruf,
       catatan: s.catatan || "", penguji: s.penguji, inputBy: s.input_by,
     })),
@@ -133,19 +137,23 @@ export async function fetchActivityData({ fromDate = defaultActivityFromDate(), 
   return {
     fromDate, toDate,
     attendance: mustOk(attendance, "attendance").map((a) => ({
-      id: a.id, studentId: a.student_id, tanggal: a.tanggal, status: a.status, note: a.note || "", inputBy: a.input_by,
+      ...activityContext(a), id: a.id, studentId: a.student_id, tanggal: a.tanggal, status: a.status, note: a.note || "", inputBy: a.input_by,
     })),
     scores: mustOk(scores, "scores").map((s) => ({
-      id: s.id, studentId: s.student_id, tanggal: s.tanggal, surahId: s.surah_id,
+      ...activityContext(s), id: s.id, studentId: s.student_id, tanggal: s.tanggal, surahId: s.surah_id,
       ayatMulai: s.ayat_mulai, ayatAkhir: s.ayat_akhir, nilai: s.nilai, nilaiHuruf: s.nilai_huruf,
       catatan: s.catatan || "", penguji: s.penguji, inputBy: s.input_by,
     })),
   };
 }
 
+function activityContext(row) {
+  return { academicYearId: row.academic_year_id, classId: row.class_id, enrollmentId: row.enrollment_id };
+}
+
 function mapJournalRow(j) {
   return {
-    id: j.id, teacherId: j.teacher_id, classId: j.class_id, tanggal: j.tanggal,
+    id: j.id, teacherId: j.teacher_id, classId: j.class_id, academicYearId: j.academic_year_id, tanggal: j.tanggal,
     materi: j.materi || "", kegiatan: j.kegiatan || "", hasil: j.hasil || "", catatan: j.catatan || "",
     inputBy: j.input_by, createdAt: j.created_at,
   };
@@ -164,7 +172,7 @@ export async function insertTeacherJournal(entry) {
     teacher_id: entry.teacherId, class_id: entry.classId, tanggal: entry.tanggal,
     materi: String(entry.materi).trim(), kegiatan: String(entry.kegiatan).trim(),
     hasil: String(entry.hasil || "").trim(), catatan: String(entry.catatan || "").trim(), input_by: userId,
-  }).select("id,teacher_id,class_id,tanggal,materi,kegiatan,hasil,catatan,input_by,created_at").single(), "Menyimpan jurnal; jika hasil belum pasti, muat ulang daftar jurnal sebelum mencoba kembali");
+  }).select("id,teacher_id,class_id,tanggal,materi,kegiatan,hasil,catatan,input_by,created_at,academic_year_id").single(), "Menyimpan jurnal; jika hasil belum pasti, muat ulang daftar jurnal sebelum mencoba kembali");
   if (["42P01", "PGRST205"].includes(result.error?.code)) throw new Error("Jurnal belum terpasang. Jalankan SQL 09_jurnal_mengajar.sql di Supabase SQL Editor.");
   return mapJournalRow(mustOk(result, "Simpan jurnal mengajar"));
 }
@@ -233,10 +241,10 @@ export async function saveAttendanceBatch(records) {
 export async function fetchAttendanceForDate(studentIds, tanggal) {
   const ids = [...new Set((studentIds || []).filter(Boolean))];
   if (!ids.length || !tanggal) return [];
-  const res = await supabase.from("attendance").select("id,student_id,tanggal,status,note,input_by")
+  const res = await supabase.from("attendance").select("id,student_id,tanggal,status,note,input_by,academic_year_id,class_id,enrollment_id")
     .in("student_id", ids).eq("tanggal", tanggal).order("id");
   return (mustOk(res, "fetchAttendanceForDate") || []).map((a) => ({
-    id:a.id, studentId:a.student_id, tanggal:a.tanggal, status:a.status, note:a.note || "", inputBy:a.input_by,
+    ...activityContext(a), id:a.id, studentId:a.student_id, tanggal:a.tanggal, status:a.status, note:a.note || "", inputBy:a.input_by,
   }));
 }
 
@@ -304,7 +312,7 @@ export async function fetchStudentScores(studentId) {
     rows.push(...page);
     if (page.length < 500) break;
   }
-  return rows.map((s) => ({ id:s.id, studentId:s.student_id, tanggal:s.tanggal, surahId:s.surah_id,
+  return rows.map((s) => ({ ...activityContext(s), id:s.id, studentId:s.student_id, tanggal:s.tanggal, surahId:s.surah_id,
     ayatMulai:s.ayat_mulai, ayatAkhir:s.ayat_akhir, nilai:s.nilai, nilaiHuruf:s.nilai_huruf,
     catatan:s.catatan || "", penguji:s.penguji, inputBy:s.input_by }));
 }
@@ -319,32 +327,23 @@ export async function fetchScoresForStudents(studentIds) {
     rows.push(...page);
     if (page.length < 500) break;
   }
-  return rows.map((s) => ({ id:s.id, studentId:s.student_id, tanggal:s.tanggal, surahId:s.surah_id,
+  return rows.map((s) => ({ ...activityContext(s), id:s.id, studentId:s.student_id, tanggal:s.tanggal, surahId:s.surah_id,
     ayatMulai:s.ayat_mulai, ayatAkhir:s.ayat_akhir, nilai:s.nilai, nilaiHuruf:s.nilai_huruf,
     catatan:s.catatan || "", penguji:s.penguji, inputBy:s.input_by }));
 }
 
 /* ---------- MASTER DATA: SISWA ---------- */
-export async function insertStudent(student) {
-  const res = await supabase.from("students").insert({
-    nis: student.nis, nama: student.nama, jenis_kelamin: student.jenisKelamin || null,
-    kelas_id: student.kelasId,
-  });
-  mustOk(res, "insertStudent");
+export async function insertStudent(student, context) {
+  return importAcademicStudents({ ...context, rows: [student] });
 }
 
-export async function bulkInsertStudents(rows) {
-  const payload = rows.map((r) => ({
-    nis: r.nis, nama: r.nama, jenis_kelamin: r.jenisKelamin || null,
-    kelas_id: r.kelasId,
-  }));
-  const res = await supabase.from("students").insert(payload);
-  mustOk(res, "bulkInsertStudents");
+export async function bulkInsertStudents(rows, context) {
+  return importAcademicStudents({ ...context, rows });
 }
 
 // Import peserta secara aman: NIS yang sudah ada diperbarui, NIS baru ditambahkan.
 // Kolom agama dan ID siswa tidak ikut ditulis agar data peserta/riwayat tetap terjaga.
-export async function bulkUpsertStudents(rows) {
+export async function bulkUpsertStudents(rows, context) {
   const seen = new Set();
   for (const row of rows) {
     const nis = String(row.nis || "").trim();
@@ -352,52 +351,37 @@ export async function bulkUpsertStudents(rows) {
     if (seen.has(nis)) throw new Error(`NIS ${nis} muncul lebih dari sekali dalam file.`);
     seen.add(nis);
   }
-  const payload = rows
-    .filter((r) => String(r.nis || "").trim())
-    .map((r) => ({
-      nis: String(r.nis).trim(), nama: r.nama, jenis_kelamin: r.jenisKelamin || null,
-      kelas_id: r.kelasId || null,
-    }));
-  if (!payload.length) throw new Error("Tidak ada NIS valid pada file.");
-  const res = await supabase.from("students").upsert(payload, { onConflict: "nis", ignoreDuplicates: false });
-  mustOk(res, "bulkUpsertStudents");
+  return importAcademicStudents({ ...context, rows });
 }
 
 export async function deleteStudent(id) {
-  const res = await supabase.from("students").delete().eq("id", id);
-  mustOk(res, "deleteStudent");
+  throw new Error("Identitas siswa dan riwayatnya dipertahankan. Gunakan menu Tahun Pelajaran untuk mencatat lulus atau mutasi keluar.");
 }
-export async function updateStudentClass(studentId, kelasId) {
-  const res = await supabase.from("students").update({ kelas_id: kelasId }).eq("id", studentId);
-  mustOk(res, "updateStudentClass");
+export async function updateStudentClass(studentId, kelasId, context) {
+  return placeAcademicStudents({ ...context, studentIds: [studentId], classId: kelasId });
 }
-export async function bulkUpdateStudentClass(studentIds, kelasId) {
-  const res = await supabase.from("students").update({ kelas_id: kelasId }).in("id", studentIds);
-  mustOk(res, "bulkUpdateStudentClass");
+export async function bulkUpdateStudentClass(studentIds, kelasId, context) {
+  return placeAcademicStudents({ ...context, studentIds, classId: kelasId });
 }
 export async function bulkDeleteStudents(studentIds) {
-  const res = await supabase.from("students").delete().in("id", studentIds);
-  mustOk(res, "bulkDeleteStudents");
+  throw new Error("Riwayat siswa dipertahankan. Gunakan menu Tahun Pelajaran untuk mencatat lulus atau mutasi keluar.");
 }
 
 /* ---------- MASTER DATA: KELAS (pengajar ditugaskan langsung ke kelas) ---------- */
-export async function insertClass(nama, teacherId = null) {
-  const res = await supabase.from("classes").insert({ nama, teacher_id: teacherId }).select().single();
-  return mustOk(res, "insertClass");
+export async function insertClass(nama, teacherId = null, yearId) {
+  return createAcademicClass({ yearId, nama, teacherId });
 }
 export async function deleteClass(id) {
-  const res = await supabase.from("classes").delete().eq("id", id);
-  mustOk(res, "deleteClass");
+  throw new Error("Kelas menjadi bagian riwayat tahun pelajaran. Kelola struktur kelas melalui menu Tahun Pelajaran.");
 }
 export async function updateClassTeacher(classId, teacherId) {
-  const res = await supabase.from("classes").update({ teacher_id: teacherId || null }).eq("id", classId);
-  mustOk(res, "updateClassTeacher");
+  const row = mustOk(await supabase.from("classes").select("*").eq("id", classId).single(), "Memuat kelas");
+  return updateAcademicClass({ classId, nama: row.nama, tingkat: row.tingkat || "", jurusan: row.jurusan || "", rombel: row.rombel || "", teacherId });
 }
-export async function findOrCreateClassByName(nama, existingClasses) {
+export async function findOrCreateClassByName(nama, existingClasses, yearId) {
   const found = existingClasses.find((c) => c.nama.toLowerCase() === nama.toLowerCase());
   if (found) return found;
-  const created = await insertClass(nama);
-  return { id: created.id, nama: created.nama, teacherId: created.teacher_id };
+  return insertClass(nama, null, yearId);
 }
 
 /* ---------- UPLOAD FILE (foto, tanda tangan, stempel, sertifikat) ---------- */
