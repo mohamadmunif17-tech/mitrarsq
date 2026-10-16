@@ -61,6 +61,14 @@ function academicMonthRange(db, month) {
   const year = db.academicYear;
   return { fromDate: `${month}-01` < year.startsOn ? year.startsOn : `${month}-01`, toDate: defaultReportDate(month) > year.endsOn ? year.endsOn : defaultReportDate(month) };
 }
+function academicActivityScope(snapshot, year, user) {
+  if (!year || !user) return { academicYearId: year?.id || null, studentIds: [] };
+  if (user.role === "admin") return { academicYearId: year.id };
+  if (user.role === "pengajar") return { academicYearId: year.id, classIds: (snapshot?.classes || []).filter((item) => item.academicYearId === year.id && item.teacherId === user.refId).map((item) => item.id) };
+  if (user.role === "siswa") return { academicYearId: year.id, studentIds: user.refId ? [user.refId] : [] };
+  if (user.role === "mentor") return { academicYearId: year.id, studentIds: [...new Set((snapshot?.mentorAssignments || []).filter((item) => item.mentorId === user.refId).map((item) => item.studentId))] };
+  return { academicYearId: year.id, studentIds: [] };
+}
 
 function withClientTimeout(request, label, timeoutMs = CLIENT_REQUEST_TIMEOUT_MS) {
   let timer;
@@ -1362,55 +1370,84 @@ function PresensiHarian({ db: yearDb, refresh, user }) {
   const [saved, setSaved] = useState(false);
   const [saveMessage, setSaveMessage] = useState("");
   const [saving, setSaving] = useState(false);
-
-  const presenceSnapshot = members.map((m) => m.id).join("|") + ":" + db.attendance.filter((r) => r.tanggal === tanggal).map((r) => `${r.id}:${r.status}`).join("|");
+  const [presenceLoad, setPresenceLoad] = useState({ key: "", loading: true, error: "", records: [] });
+  const [presenceReload, setPresenceReload] = useState(0);
+  const memberKey = members.map((m) => m.id).sort().join(",");
+  const presenceKey = `${user.id}:${db.academicYear.id}:${tanggal}:${memberKey}`;
+  const presenceKeyRef = useRef(presenceKey);
+  presenceKeyRef.current = presenceKey;
+  const presenceReady = presenceLoad.key === presenceKey && !presenceLoad.loading && !presenceLoad.error;
+  const baseline = new Map(presenceLoad.records.map((record) => [record.studentId, record]));
+  const changedMembers = members.filter((member) => !!draft[member.id] && draft[member.id] !== (baseline.get(member.id)?.status || null));
   useEffect(() => {
-    const map = {};
-    members.forEach((m) => {
-      const existing = db.attendance.find((a) => a.studentId === m.id && a.tanggal === tanggal);
-      map[m.id] = existing?.status || null;
-    });
-    setDraft(map);
+    let cancelled = false;
+    const controller = new AbortController();
+    setPresenceLoad({ key: presenceKey, loading: true, error: "", records: [] });
+    setDraft({});
     setSaved(false); setSaveMessage("");
-    // eslint-disable-next-line
-  }, [tanggal, presenceSnapshot]);
+    fetchAttendanceForDate(memberKey ? memberKey.split(",") : [], tanggal, { academicYearId: db.academicYear.id, signal: controller.signal })
+      .then((records) => {
+        if (cancelled) return;
+        setPresenceLoad({ key: presenceKey, loading: false, error: "", records });
+        setDraft(Object.fromEntries(records.map((record) => [record.studentId, record.status])));
+      }).catch((error) => {
+        if (!cancelled) setPresenceLoad({ key: presenceKey, loading: false, error: error.message, records: [] });
+      });
+    return () => { cancelled = true; controller.abort(); };
+  }, [presenceKey, presenceReload]);
+
+  function changePresenceDate(value) {
+    if (!dateInAcademicYear(value, db.academicYear) || value === tanggal) return;
+    if (changedMembers.length && !window.confirm("Ada presensi yang belum disimpan. Pindah tanggal dan abaikan perubahan?")) return;
+    setTanggal(value);
+  }
 
   function setStatus(studentId, status) {
+    if (!presenceReady || !canWriteAcademicYear(db.academicYear)) return;
     setDraft((d) => ({ ...d, [studentId]: status }));
     setSaved(false); setSaveMessage("");
   }
   function hadirSemua() {
+    if (!presenceReady || !canWriteAcademicYear(db.academicYear)) return;
     const map = { ...draft };
     visibleMembers.forEach((m) => { map[m.id] = draft[m.id] || "HADIR"; });
     setDraft(map);
     setSaved(false); setSaveMessage("");
   }
   async function simpan() {
-    if (saving) return;
+    if (saving || !presenceReady) return;
     setSaved(false); setSaveMessage("");
     if (!canWriteAcademicYear(db.academicYear) || !dateInAcademicYear(tanggal, db.academicYear)) { setSaveMessage("Pilih tanggal dalam tahun pelajaran aktif."); return; }
-    const newRecords = members.filter((m) => draft[m.id]).map((m) => ({
+    const newRecords = changedMembers.map((m) => ({
       studentId: m.id,
       tanggal,
       status: draft[m.id],
-      note: "",
+      note: baseline.get(m.id)?.note || "",
       inputBy: user.id,
     }));
-    if (!newRecords.length) {setSaveMessage("Belum ada presensi yang dipilih. Tandai minimal satu siswa, lalu simpan."); return;}
+    if (!newRecords.length) {setSaveMessage("Tidak ada perubahan presensi untuk disimpan."); return;}
     setSaving(true);
+    const savedKey = presenceKey;
     try {
       const result = await saveAttendanceBatch(newRecords);
       const notice = result.savedCount
         ? `${result.savedCount} presensi berhasil tersimpan untuk ${fmtDate(tanggal)}.`
         : "Tidak ada presensi yang disimpan karena siswa yang dipilih bukan peserta Tahfidz.";
       const excluded = result.excludedCount ? ` ${result.excludedCount} siswa non-Muslim tidak disertakan.` : "";
-      setSaved(true);
-      setSaveMessage(notice + excluded);
-      try { await refresh({attendanceFor:{studentIds:members.map((member) => member.id), date:tanggal}}); } catch { setSaveMessage(notice + excluded + " Tampilan gagal diperbarui. Muat ulang halaman."); }
+      if (presenceKeyRef.current !== savedKey) return;
+      const changedIds = new Set((result.rows || []).map((record) => record.studentId));
+      const records = [...presenceLoad.records.filter((record) => !changedIds.has(record.studentId)), ...(result.rows || [])];
+      setPresenceLoad({ key: savedKey, loading: false, error: "", records });
+      setDraft(Object.fromEntries(records.map((record) => [record.studentId, record.status])));
+      setSaved(true); setSaveMessage(notice + excluded);
+      await refresh({ attendanceSaved: result.rows || [], expectedUserId: user.id });
     } catch (e) {
-      setSaveMessage("Gagal menyimpan presensi: " + e.message);
+      if (presenceKeyRef.current === savedKey) {
+        setSaveMessage("Penyimpanan presensi belum berhasil dipastikan: " + e.message + " Muat ulang tanggal ini sebelum mencoba menyimpan kembali.");
+        setPresenceLoad((previous) => ({ ...previous, loading: false, error: "Periksa status tersimpan dengan memuat ulang tanggal ini." }));
+      }
     }
-    setSaving(false);
+    finally { if (presenceKeyRef.current === savedKey) setSaving(false); }
   }
 
   return (
@@ -1423,7 +1460,7 @@ function PresensiHarian({ db: yearDb, refresh, user }) {
       )}
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 14, flexWrap: "wrap", gap: 10 }}>
         <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
-          <input type="date" className="t-input" style={{ width: 180 }} disabled={saving} value={tanggal} min={db.academicYear.startsOn} max={db.academicYear.endsOn < isoDaysAgo(0) ? db.academicYear.endsOn : isoDaysAgo(0)} onChange={(e) => { if (dateInAcademicYear(e.target.value, db.academicYear)) setTanggal(e.target.value); }} />
+          <input type="date" className="t-input" style={{ width: 180 }} disabled={saving} value={tanggal} min={db.academicYear.startsOn} max={db.academicYear.endsOn < isoDaysAgo(0) ? db.academicYear.endsOn : isoDaysAgo(0)} onChange={(e) => changePresenceDate(e.target.value)} />
           {availableClasses.length > 1 && (
             <select className="t-select" style={{ width: 200 }} value={kelasFilter} onChange={(e) => setKelasFilter(e.target.value)}>
               <option value="all">Semua Kelas ({members.length} siswa)</option>
@@ -1435,12 +1472,15 @@ function PresensiHarian({ db: yearDb, refresh, user }) {
           )}
         </div>
         <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
-          <button className="t-btn t-btn-ghost" disabled={saving || !canWriteAcademicYear(db.academicYear)} onClick={hadirSemua}>Tandai Hadir Semua{kelasFilter !== "all" ? " (Kelas Ini)" : ""}</button>
-          <button className="t-btn t-btn-primary" onClick={simpan} disabled={saving || !members.length || !canWriteAcademicYear(db.academicYear)}>
+          <button className="t-btn t-btn-ghost" disabled={saving || !presenceReady || !canWriteAcademicYear(db.academicYear)} onClick={hadirSemua}>Tandai Hadir Semua{kelasFilter !== "all" ? " (Kelas Ini)" : ""}</button>
+          <button className="t-btn t-btn-primary" onClick={simpan} disabled={saving || !presenceReady || !changedMembers.length || !canWriteAcademicYear(db.academicYear)}>
             {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} {saving ? "Menyimpan..." : "Simpan Presensi"}
           </button>
         </div>
       </div>
+      {(!presenceReady && !presenceLoad.error) && <p role="status">Memuat presensi tanggal {fmtDate(tanggal)}...</p>}
+      {presenceLoad.key === presenceKey && presenceLoad.error && <div role="alert" className="ay-notice">Presensi tanggal ini belum dapat dimuat: {presenceLoad.error} <button type="button" className="t-btn" onClick={() => setPresenceReload((v) => v + 1)} disabled={saving}>Muat ulang tanggal ini</button></div>}
+      {presenceReady && <p style={{fontSize:12}}>Hanya {changedMembers.length} perubahan yang akan disimpan. Catatan yang sudah tersimpan tetap dipertahankan.</p>}
       {saveMessage && <div className={`save-feedback ${saved ? "success" : "error"}`} role={saved ? "status" : "alert"}>{saveMessage}</div>}
       <div className="t-card" style={{ padding: 8, overflowX: "auto" }}>
         <table className="t-table">
@@ -1456,7 +1496,7 @@ function PresensiHarian({ db: yearDb, refresh, user }) {
                       <button
                         key={key}
                         className={`t-status-btn ${draft[m.id] === key ? "selected-" + key : ""}`}
-                        disabled={saving || !canWriteAcademicYear(db.academicYear)} onClick={() => setStatus(m.id, key)}
+                        disabled={saving || !presenceReady || !canWriteAcademicYear(db.academicYear)} onClick={() => setStatus(m.id, key)}
                       >
                         <meta.icon size={15} /> {meta.label}
                       </button>
@@ -1498,6 +1538,28 @@ function PenilaianTahfidz({ db: yearDb, refresh, user }) {
   const [saving, setSaving] = useState(false);
   const [templateBusy, setTemplateBusy] = useState(false);
   const [templateMsg, setTemplateMsg] = useState("");
+  const [scoreHistory, setScoreHistory] = useState({ key: "", loading: true, error: "", rows: [] });
+  const [historyReload, setHistoryReload] = useState(0);
+  const [saveCheckRequired, setSaveCheckRequired] = useState(false);
+  const uncertainSaveVersion = useRef(0);
+  const selectedStudent = filteredStudents.find((student) => student.id === studentId);
+  const historyKey = `${user.id}:${db.academicYear.id}:${selectedStudent?.id || ""}`;
+  const historyKeyRef = useRef(historyKey);
+  historyKeyRef.current = historyKey;
+  useEffect(() => {
+    let cancelled = false;
+    const controller = new AbortController();
+    const checkVersion = uncertainSaveVersion.current;
+    if (!selectedStudent) {
+      setScoreHistory({ key: historyKey, loading: false, error: "", rows: [] });
+      return () => { cancelled = true; controller.abort(); };
+    }
+    setScoreHistory((previous) => ({ key: historyKey, loading: true, error: "", rows: previous.key === historyKey ? previous.rows : [] }));
+    fetchStudentScores(selectedStudent.id, { academicYearId: db.academicYear.id, fromDate: db.academicYear.startsOn, toDate: db.academicYear.endsOn, limit: 6, signal: controller.signal })
+      .then((rows) => { if (!cancelled) { setScoreHistory({ key: historyKey, loading: false, error: "", rows }); if (checkVersion === uncertainSaveVersion.current) setSaveCheckRequired(false); } })
+      .catch((error) => { if (!cancelled) setScoreHistory((previous) => ({ key: historyKey, loading: false, error: error.message, rows: previous.key === historyKey ? previous.rows : [] })); });
+    return () => { cancelled = true; controller.abort(); };
+  }, [historyKey, historyReload]);
 
   function handleKelasFilter(val) {
     setKelasFilter(val);
@@ -1515,7 +1577,7 @@ function PenilaianTahfidz({ db: yearDb, refresh, user }) {
   const surah = db.surahs.find((s) => s.id === surahId);
 
   async function submit() {
-    if (saving) return;
+    if (saving || saveCheckRequired) return;
     setMsg("");
     if (!canWriteAcademicYear(db.academicYear) || !dateInAcademicYear(tanggal, db.academicYear)) { setMsg("Pilih tanggal dalam tahun pelajaran aktif."); return; }
     if (!studentId) { setMsg("Pilih siswa terlebih dahulu."); return; }
@@ -1534,16 +1596,22 @@ function PenilaianTahfidz({ db: yearDb, refresh, user }) {
       nilaiHuruf, catatan: catatan.trim(), penguji: user.nama, inputBy: user.id,
     };
     setSaving(true);
+    const savedHistoryKey = historyKey;
     try {
-      await insertScore(entry);
+      const confirmed = await insertScore(entry);
+      if (historyKeyRef.current !== savedHistoryKey) return;
       setMsg(`Penilaian ${filteredStudents.find(s => s.id === studentId)?.nama || "siswa"} berhasil tersimpan untuk ${fmtDate(tanggal)}.`);
-      try { await refresh({scoresFor:entry.studentId}); } catch { setMsg("Penilaian sudah tersimpan, tetapi tampilan gagal diperbarui. Muat ulang halaman; tidak perlu menyimpan ulang."); }
+      setScoreHistory((previous) => ({ ...previous, key: savedHistoryKey, rows: [confirmed, ...(previous.key === savedHistoryKey ? previous.rows.filter((row) => row.id !== confirmed.id) : [])].sort((a, b) => b.tanggal.localeCompare(a.tanggal) || String(b.id).localeCompare(String(a.id))).slice(0,6) }));
+      await refresh({ scoreSaved: confirmed, expectedUserId: user.id });
+      setHistoryReload((value) => value + 1);
       setCatatan("");
 
     } catch (e) {
-      setMsg("Gagal menyimpan: " + e.message);
+      uncertainSaveVersion.current += 1;
+      setSaveCheckRequired(true);
+      setMsg("Penyimpanan belum berhasil dipastikan: " + e.message + " Muat ulang riwayat dan periksa apakah nilai sudah tersimpan sebelum mencoba lagi.");
     }
-    setSaving(false);
+    finally { if (historyKeyRef.current === savedHistoryKey) setSaving(false); }
   }
 
   const templateStudents = kelasFilter === "all" ? scopeStudents : filteredStudents;
@@ -1655,7 +1723,7 @@ function PenilaianTahfidz({ db: yearDb, refresh, user }) {
     finally { setTemplateBusy(false); }
   }
 
-  const history = studentScores(db, studentId).slice(0, 6);
+  const history = scoreHistory.key === historyKey ? scoreHistory.rows : [];
   const NILAI_OPTIONS = ["A+", "A", "B+", "B", "C"];
   const nilaiColor = { "A+": "var(--teal)", "A": "var(--teal)", "B+": "#7A5E32", "B": "#7A5E32", "C": "var(--red)" };
 
@@ -1663,7 +1731,7 @@ function PenilaianTahfidz({ db: yearDb, refresh, user }) {
     <div>
       <SectionTitle sub="Catat hasil simakan/setoran hafalan siswa">{isMentor ? "Input Penilaian" : "Penilaian Tahfidz"}</SectionTitle>
       <div className="grid-2" style={{ gap: 16 }}>
-        <div className="t-card" style={{ padding: 20 }}>
+        <fieldset className="t-card" disabled={saving} style={{ padding: 20, margin: 0, minWidth: 0 }}>
           <div style={{ display: "flex", flexDirection: "column", gap: 12 }}>
             <div>
               <label style={{ fontSize: 12, fontWeight: 600, color: "#8A8064" }}>1. Tanggal</label>
@@ -1733,13 +1801,16 @@ function PenilaianTahfidz({ db: yearDb, refresh, user }) {
             </div>
 
             {msg && <div className={`save-feedback ${msg.includes("tersimpan") ? "success" : "error"}`} role={msg.includes("tersimpan") ? "status" : "alert"}>{msg}</div>}
-            <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={submit} disabled={saving || !studentId || !filteredStudents.some((s) => s.id === studentId) || !canWriteAcademicYear(db.academicYear)}>
+            <button className="t-btn t-btn-primary" style={{ justifyContent: "center" }} onClick={submit} disabled={saving || saveCheckRequired || !studentId || !filteredStudents.some((s) => s.id === studentId) || !canWriteAcademicYear(db.academicYear)}>
               {saving ? <Loader2 size={15} className="animate-spin" /> : <CheckCircle2 size={15} />} {saving ? "Menyimpan..." : "Simpan Penilaian"}
             </button>
           </div>
-        </div>
+        </fieldset>
         <div className="t-card" style={{ padding: 20 }}>
           <div style={{ fontWeight: 700, marginBottom: 12, fontSize: 14 }}>Riwayat Terbaru &mdash; {scopeStudents.find((s) => s.id === studentId)?.nama}</div>
+          {saveCheckRequired && <p role="alert">Periksa hasil penyimpanan terakhir. <button type="button" className="t-btn" onClick={() => setHistoryReload((v) => v + 1)}>Muat ulang dan periksa riwayat</button></p>}
+          {(scoreHistory.key !== historyKey || scoreHistory.loading) && <p role="status">Memuat riwayat siswa ini...</p>}
+          {scoreHistory.key === historyKey && scoreHistory.error && <div role="alert" className="ay-notice">Riwayat belum dapat dimuat: {scoreHistory.error} Input penilaian baru tetap tersedia. <button type="button" className="t-btn" onClick={() => setHistoryReload((v) => v + 1)}>Muat ulang riwayat</button></div>}
           {history.length ? (
             <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
               {history.map((h) => (
@@ -1750,11 +1821,11 @@ function PenilaianTahfidz({ db: yearDb, refresh, user }) {
                     {h.catatan && <div style={{ fontSize: 11.5, color: "#8A8064", fontStyle: "italic", marginTop: 2 }}>&ldquo;{h.catatan}&rdquo;</div>}
                   </div>
                   <div className="font-mono" style={{ fontWeight: 700, color: nilaiColor[h.nilaiHuruf] || "var(--teal)", flexShrink: 0 }}>{h.nilaiHuruf || h.nilai}</div>
-                  <DeleteScoreButton score={h} user={user} db={db} refresh={refresh} />
+                  <DeleteScoreButton score={h} user={user} db={db} refresh={async (options) => { await refresh(options); setHistoryReload((v) => v + 1); }} />
                 </div>
               ))}
             </div>
-          ) : <Empty text="Belum ada riwayat penilaian." />}
+          ) : scoreHistory.key === historyKey && !scoreHistory.loading && !scoreHistory.error ? <Empty text="Belum ada riwayat penilaian pada tahun pelajaran ini." /> : null}
         </div>
       </div>
       <div className="t-card" style={{ padding: 20, marginTop: 16 }}>
@@ -3046,7 +3117,9 @@ export default function TahfidzApp() {
     const sessionKey = sessionHandledRef.current;
     latestActivitySyncRef.current = requestVersion;
     try {
-      const activity = await fetchActivityData();
+      const requestedYear = selectedAcademicYear(db || {}, selectedYearId);
+      if (!requestedYear) return;
+      const activity = await fetchActivityData({ fromDate: requestedYear.startsOn, toDate: requestedYear.endsOn, ...academicActivityScope(db, requestedYear, profile) });
       if (latestActivitySyncRef.current !== requestVersion || sessionHandledRef.current !== sessionKey) return activity;
       setDb((prev) => {
         if (!prev) return prev;
@@ -3070,13 +3143,27 @@ export default function TahfidzApp() {
 
   async function refresh(options) {
     const refreshSessionKey = sessionHandledRef.current;
+    if (options?.expectedUserId && options.expectedUserId !== refreshSessionKey) return;
+    if (options?.attendanceSaved || options?.scoreSaved) {
+      activityYearRequestsRef.current.clear();
+      latestActivitySyncRef.current = 0;
+      setDb((previous) => {
+        if (!previous) return previous;
+        if (options.attendanceSaved) {
+          const ids = new Set(options.attendanceSaved.map((row) => row.id));
+          return { ...previous, attendance: [...previous.attendance.filter((row) => !ids.has(row.id)), ...options.attendanceSaved] };
+        }
+        return { ...previous, scores: [...previous.scores.filter((row) => row.id !== options.scoreSaved.id), options.scoreSaved] };
+      });
+      return;
+    }
     if (options?.activityYear) {
       const year = options.activityYear;
       const requestVersion = ++activityRequestVersionRef.current;
       activityYearRequestsRef.current.set(year.id, requestVersion);
       latestActivitySyncRef.current = 0;
       const sessionKey = sessionHandledRef.current;
-      const activity = await fetchActivityData({ fromDate: year.startsOn, toDate: year.endsOn });
+      const activity = await fetchActivityData({ fromDate: year.startsOn, toDate: year.endsOn, signal: options.signal, ...academicActivityScope(db, year, profile) });
       if (sessionHandledRef.current !== sessionKey || activityYearRequestsRef.current.get(year.id) !== requestVersion) return;
       setDb((prev) => prev ? { ...prev,
         attendance: replaceActivityRange(prev.attendance, activity.attendance, { fromDate: year.startsOn, toDate: year.endsOn, preserveMonths: [...activityMonthRequestsRef.current].filter(([,v]) => v > requestVersion).map(([month]) => month) }),
@@ -3088,7 +3175,8 @@ export default function TahfidzApp() {
       activityYearRequestsRef.current.clear();
       latestActivitySyncRef.current = 0;
       const {studentIds, date} = options.attendanceFor;
-      const attendance = await fetchAttendanceForDate(studentIds, date);
+      const requestedYear = selectedAcademicYear(db || {}, selectedYearId);
+      const attendance = await fetchAttendanceForDate(studentIds, date, { academicYearId: requestedYear?.id });
       if (sessionHandledRef.current !== refreshSessionKey) return;
       const ids = new Set(studentIds || []);
       setDb((prev) => prev ? { ...prev, attendance: [...prev.attendance.filter((row) => !(ids.has(row.studentId) && row.tanggal === date)), ...attendance] } : prev);
@@ -3102,7 +3190,8 @@ export default function TahfidzApp() {
       const nextMonth = new Date(`${fromDate}T12:00:00Z`);
       nextMonth.setUTCMonth(nextMonth.getUTCMonth() + 1);
       const toDate = new Date(nextMonth.getTime() - 86400000).toISOString().slice(0, 10);
-      const activity = await fetchActivityData({ fromDate, toDate });
+      const requestedYear = selectedAcademicYear(db || {}, selectedYearId);
+      const activity = await fetchActivityData({ fromDate, toDate, ...academicActivityScope(db, requestedYear, profile) });
       if (activityMonthRequestsRef.current.get(options.activityMonth) !== requestVersion || sessionHandledRef.current !== sessionKey) return activity;
       setDb((prev) => {
         if (!prev) return prev;
@@ -3116,37 +3205,29 @@ export default function TahfidzApp() {
       activityYearRequestsRef.current.clear();
       latestActivitySyncRef.current = 0;
       const studentIds = [...new Set(options.scoresForMany.filter(Boolean))];
-      const scores = await fetchScoresForStudents(studentIds);
+      const requestedYear = selectedAcademicYear(db || {}, selectedYearId);
+      const scores = await fetchScoresForStudents(studentIds, { academicYearId: requestedYear?.id });
       if (sessionHandledRef.current !== refreshSessionKey) return;
-      setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => !studentIds.includes(s.studentId)), ...scores] } : prev);
+      setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => !(studentIds.includes(s.studentId) && s.academicYearId === requestedYear?.id)), ...scores] } : prev);
       return;
     }
     if (options?.scoresFor) {
       activityYearRequestsRef.current.clear();
       latestActivitySyncRef.current = 0;
-      const scores = await fetchStudentScores(options.scoresFor);
+      const requestedYear = selectedAcademicYear(db || {}, selectedYearId);
+      const scores = await fetchStudentScores(options.scoresFor, { academicYearId: requestedYear?.id });
       if (sessionHandledRef.current !== refreshSessionKey) return;
-      setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => s.studentId !== options.scoresFor), ...scores] } : prev);
+      setDb((prev) => prev ? { ...prev, scores: [...prev.scores.filter((s) => !(s.studentId === options.scoresFor && s.academicYearId === requestedYear?.id)), ...scores] } : prev);
       return;
     }
     try {
       activityYearRequestsRef.current.clear();
       latestActivitySyncRef.current = 0;
       const data = await fetchAllData({ includeActivity: false });
-      let loadedYear = null;
-      if (!options?.initial) {
-        const requestedYear = selectedAcademicYear(data, selectedYearId);
-        if (requestedYear) {
-          loadedYear = requestedYear;
-          const activity = await fetchActivityData({ fromDate: requestedYear.startsOn, toDate: requestedYear.endsOn });
-          data.attendance = activity.attendance;
-          data.scores = activity.scores;
-        }
-      }
       if (sessionHandledRef.current !== refreshSessionKey) return;
-      setDb((previous) => loadedYear && previous ? { ...data,
-        attendance: replaceActivityRange(previous.attendance, data.attendance, { fromDate: loadedYear.startsOn, toDate: loadedYear.endsOn }),
-        scores: replaceActivityRange(previous.scores, data.scores, { fromDate: loadedYear.startsOn, toDate: loadedYear.endsOn }),
+      setDb((previous) => previous ? { ...data,
+        attendance: previous.attendance,
+        scores: previous.scores,
       } : data);
       if (options?.cacheKey) {
         try { sessionStorage.setItem(`saqu-db-cache:academic-v1:${options.cacheKey}`, JSON.stringify({ savedAt: Date.now(), data })); } catch { /* cache is optional */ }
@@ -3253,16 +3334,17 @@ export default function TahfidzApp() {
 
   const year = selectedAcademicYear(db || {}, selectedYearId);
   useEffect(() => {
-    if (!year || !profile) return;
+    if (!year || !profile || !["dashboard", "monitoring"].includes(view)) return;
     let cancelled = false;
+    const controller = new AbortController();
     setYearActivity({ id: year.id, loading: true, error: "" });
-    refresh({ activityYear: year }).then(() => {
+    refresh({ activityYear: year, signal: controller.signal }).then(() => {
       if (!cancelled) setYearActivity({ id: year.id, loading: false, error: "" });
     }).catch((error) => {
       if (!cancelled) setYearActivity({ id: year.id, loading: false, error: error.message });
     });
-    return () => { cancelled = true; };
-  }, [year?.id, profile?.id]);
+    return () => { cancelled = true; controller.abort(); };
+  }, [year?.id, profile?.id, view]);
 
   if (recoveryMode) {
     return <ResetPasswordScreen onDone={handleRecoveryDone} />;
@@ -3353,10 +3435,10 @@ export default function TahfidzApp() {
             </div>
           )}
           {view === "dashboard" && yearActivity.id === year?.id && yearActivity.loading && <p role="status">Memuat aktivitas tahun pelajaran {year.nama}...</p>}
-          {yearActivity.id === year?.id && yearActivity.error && <div className="ay-notice" role="alert">Aktivitas tahun ini belum lengkap: {yearActivity.error} <button className="t-btn" onClick={() => refresh({ activityYear: year }).then(() => setYearActivity({id:year.id,loading:false,error:""})).catch((error) => setYearActivity({id:year.id,loading:false,error:error.message}))}>Muat ulang</button></div>}
+          {["dashboard", "monitoring"].includes(view) && yearActivity.id === year?.id && yearActivity.error && <div className="ay-notice" role="alert">Ringkasan tahun ini belum lengkap: {yearActivity.error} Presensi dan penilaian tetap memuat data masing-masing. <button className="t-btn" onClick={() => refresh({ activityYear: year }).then(() => setYearActivity({id:year.id,loading:false,error:""})).catch((error) => setYearActivity({id:year.id,loading:false,error:error.message}))}>Muat ulang ringkasan</button></div>}
           <div key={`${view}:${year?.id}`}>
             {!canWriteAcademicYear(year) && ["presensi", "penilaian", "teacher-attendance"].includes(view) && <p className="ay-notice">Tahun ini hanya dapat dilihat. Input kegiatan dibuka pada tahun pelajaran aktif.</p>}
-            <fieldset disabled={(year?.status === "archived" && view === "master") || ((yearActivity.id !== year?.id || yearActivity.loading || !!yearActivity.error) && ["presensi", "penilaian"].includes(view))} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
+            <fieldset disabled={year?.status === "archived" && view === "master"} style={{ border: 0, margin: 0, padding: 0, minWidth: 0 }}>
               {content}
             </fieldset>
           </div>

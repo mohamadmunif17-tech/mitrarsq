@@ -4,6 +4,10 @@ import { supabase, SUPABASE_URL } from "./supabaseClient.js";
 import { fetchAcademicData, createAcademicClass, updateAcademicClass, placeAcademicStudents, importAcademicStudents } from "./academicYearApi.js";
 
 const DB_REQUEST_TIMEOUT_MS = 20000;
+const ACTIVITY_PAGE_SIZE = 500;
+const ACTIVITY_ID_BATCH_SIZE = 100;
+const ATTENDANCE_COLUMNS = "id,student_id,tanggal,status,note,input_by,academic_year_id,class_id,enrollment_id";
+const SCORE_COLUMNS = "id,student_id,tanggal,surah_id,ayat_mulai,ayat_akhir,nilai,nilai_huruf,catatan,penguji,input_by,academic_year_id,class_id,enrollment_id";
 
 function withDbTimeout(request, label, timeoutMs = DB_REQUEST_TIMEOUT_MS) {
   let timer;
@@ -38,38 +42,73 @@ async function fetchRows(table, options = {}) {
     students: "id,nis,nama,jenis_kelamin,kelas_id,agama",
     mentor_assignments: "id,mentor_id,student_id",
     surahs: "id,nama,jumlah_ayat,juz",
-    attendance: "id,student_id,tanggal,status,note,input_by,academic_year_id,class_id,enrollment_id",
-    scores: "id,student_id,tanggal,surah_id,ayat_mulai,ayat_akhir,nilai,nilai_huruf,catatan,penguji,input_by,academic_year_id,class_id,enrollment_id",
+    attendance: ATTENDANCE_COLUMNS,
+    scores: SCORE_COLUMNS,
     profiles: "id,nama,role,ref_id,status,signature_url",
     certifications: "id,teacher_id,nama_sertifikasi,penyelenggara,tahun,file_url",
     riwayat_pendidikan: "id,teacher_id,jenjang,institusi,jurusan,tahun_lulus",
     teacher_journals: "id,teacher_id,class_id,tanggal,materi,kegiatan,hasil,catatan,input_by,created_at,academic_year_id",
   };
-  const data = [];
   const activityTable = table === "attendance" || table === "scores" || table === "teacher_journals";
   const fromDate = activityTable ? (options.fromDate || null) : null;
   const toDate = activityTable ? (options.toDate || null) : null;
-  for (let offset = 0; ; offset += 500) {
-    let query = supabase.from(table).select(columns[table] || "*");
-    // Riwayat aktivitas dibatasi satu tahun saat startup. Laporan bulan lama
-    // tetap dapat dimuat melalui query khusus, tanpa menahan login seluruh aplikasi.
-    if (fromDate || toDate) {
-      if (fromDate) query = query.gte("tanggal", fromDate);
-      if (toDate) query = query.lte("tanggal", toDate);
-      query = query.order("tanggal", { ascending: false }).order("id", { ascending: false });
+  const studentBatches = activityTable ? activityIdBatches(options.studentIds) : [null];
+  const classBatches = activityTable ? activityIdBatches(options.classIds) : [null];
+  const data = [];
+  // Daftar kosong adalah lingkup kosong, bukan permintaan seluruh sekolah.
+  for (const studentBatch of studentBatches) {
+    for (const classBatch of classBatches) {
+      for (let offset = 0; ; offset += ACTIVITY_PAGE_SIZE) {
+        const pageSize = options.limit == null ? ACTIVITY_PAGE_SIZE : Math.min(ACTIVITY_PAGE_SIZE, options.limit - data.length);
+        if (pageSize <= 0) return { data: sortActivityRows(data), error: null };
+        let query = supabase.from(table).select(columns[table] || "*");
+        if (activityTable) {
+          if (options.academicYearId) query = query.eq("academic_year_id", options.academicYearId);
+          if (studentBatch) query = query.in("student_id", studentBatch);
+          if (classBatch) query = query.in("class_id", classBatch);
+          if (options.tanggal) query = query.eq("tanggal", options.tanggal);
+          if (fromDate) query = query.gte("tanggal", fromDate);
+          if (toDate) query = query.lte("tanggal", toDate);
+          query = query.order("tanggal", { ascending: false }).order("id", { ascending: false });
+        } else query = query.order("id");
+        query = query.range(offset, offset + pageSize - 1);
+        if (options.signal) query = query.abortSignal(options.signal);
+        const result = await withDbTimeout(query, `Memuat ${table}`);
+        if (result.error) return result;
+        const page = result.data || [];
+        data.push(...page);
+        if (page.length < pageSize) break;
+      }
     }
-    else query = query.order("id");
-    query = query.range(offset, offset + 499);
-    const result = await withDbTimeout(query, `Memuat ${table}`);
-    if (result.error) return result;
-    data.push(...(result.data || []));
-    if ((result.data || []).length < 500) return {data,error:null};
   }
+  return { data: activityTable ? sortActivityRows(data) : data, error: null };
 }
 
+function activityIdBatches(value) {
+  if (value == null) return [null];
+  if (!Array.isArray(value)) throw new Error("Lingkup kelas/siswa harus berupa daftar ID.");
+  const ids = [...new Set(value.filter(Boolean))];
+  const batches = [];
+  for (let i = 0; i < ids.length; i += ACTIVITY_ID_BATCH_SIZE) batches.push(ids.slice(i, i + ACTIVITY_ID_BATCH_SIZE));
+  return batches;
+}
 
-/* ---------- FETCH SEMUA DATA (dipanggil ulang setelah tiap mutasi) ---------- */
-export async function fetchAllData({ includeActivity = true, activityFromDate = defaultActivityFromDate() } = {}) {
+function sortActivityRows(rows) {
+  return rows.sort((a, b) => String(b.tanggal || "").localeCompare(String(a.tanggal || "")) || String(b.id).localeCompare(String(a.id)));
+}
+
+function mapAttendanceRow(a) {
+  return { ...activityContext(a), id: a.id, studentId: a.student_id, tanggal: a.tanggal, status: a.status, note: a.note || "", inputBy: a.input_by };
+}
+
+function mapScoreRow(s) {
+  return { ...activityContext(s), id: s.id, studentId: s.student_id, tanggal: s.tanggal, surahId: s.surah_id,
+    ayatMulai: s.ayat_mulai, ayatAkhir: s.ayat_akhir, nilai: s.nilai, nilaiHuruf: s.nilai_huruf,
+    catatan: s.catatan || "", penguji: s.penguji, inputBy: s.input_by };
+}
+
+/* ---------- MASTER DATA; AKTIVITAS DIMUAT SESUAI LINGKUP TAMPILAN ---------- */
+export async function fetchAllData({ includeActivity = false, activityFromDate = defaultActivityFromDate() } = {}) {
   const academic = await fetchAcademicData();
   const [classes, teachers, mentors, students, mentorAssignments, surahs, attendance, scores, profiles, certifications, riwayatPendidikan, schoolSettings] =
     await Promise.all([
@@ -127,23 +166,18 @@ export async function fetchAllData({ includeActivity = true, activityFromDate = 
   };
 }
 
-// Aktivitas dimuat terpisah setelah dashboard tampil agar riwayat besar tidak
-// membuat pengguna melihat spinner tanpa batas. Hasilnya digabung di App.jsx.
-export async function fetchActivityData({ fromDate = defaultActivityFromDate(), toDate = null } = {}) {
+// Laporan/dashboard meminta tahun, tanggal, dan lingkup pengguna secara eksplisit.
+// Form input memakai permintaan presensi harian/riwayat siswa di bawah.
+export async function fetchActivityData({ fromDate = defaultActivityFromDate(), toDate = null, academicYearId = null, classIds = null, studentIds = null, signal = null } = {}) {
+  const options = { fromDate, toDate, academicYearId, classIds, studentIds, signal };
   const [attendance, scores] = await Promise.all([
-    fetchRows("attendance", { fromDate, toDate }),
-    fetchRows("scores", { fromDate, toDate }),
+    fetchRows("attendance", options),
+    fetchRows("scores", options),
   ]);
   return {
     fromDate, toDate,
-    attendance: mustOk(attendance, "attendance").map((a) => ({
-      ...activityContext(a), id: a.id, studentId: a.student_id, tanggal: a.tanggal, status: a.status, note: a.note || "", inputBy: a.input_by,
-    })),
-    scores: mustOk(scores, "scores").map((s) => ({
-      ...activityContext(s), id: s.id, studentId: s.student_id, tanggal: s.tanggal, surahId: s.surah_id,
-      ayatMulai: s.ayat_mulai, ayatAkhir: s.ayat_akhir, nilai: s.nilai, nilaiHuruf: s.nilai_huruf,
-      catatan: s.catatan || "", penguji: s.penguji, inputBy: s.input_by,
-    })),
+    attendance: mustOk(attendance, "attendance").map(mapAttendanceRow),
+    scores: mustOk(scores, "scores").map(mapScoreRow),
   };
 }
 
@@ -191,7 +225,7 @@ export async function fetchTeacherJournals(month) {
 // Identitas pencatat mengikuti sesi Supabase, bukan nilai dari formulir.
 // Otorisasi siswa tetap ditegakkan oleh RLS di database.
 async function requireInputUser(expectedIds) {
-  const { data, error } = await supabase.auth.getUser();
+  const { data, error } = await withDbTimeout(supabase.auth.getUser(), "Memeriksa sesi login");
   if (error || !data?.user) {
     throw new Error("Sesi login tidak valid. Silakan keluar lalu masuk kembali.");
   }
@@ -208,7 +242,7 @@ async function eligibleStudentIds(studentIds) {
   const eligible = new Set();
   for (let i = 0; i < ids.length; i += 100) {
     const batch = ids.slice(i, i + 100);
-    const rows = mustOk(await supabase.from("students").select("id,agama").in("id", batch), "Periksa peserta Tahfidz");
+    const rows = mustOk(await withDbTimeout(supabase.from("students").select("id,agama").in("id", batch), "Memeriksa peserta Tahfidz"), "Periksa peserta Tahfidz");
     if (!rows || batch.some(id => !rows.some(s => s.id === id))) {
       throw new Error("Sebagian data siswa tidak tersedia untuk akun ini. Muat ulang halaman sebelum menyimpan.");
     }
@@ -229,23 +263,20 @@ export async function saveAttendanceBatch(records) {
   const eligible = await eligibleStudentIds(records.map(r => r.studentId));
   const included = records.filter(r => eligible.has(r.studentId));
   const excludedCount = records.length - included.length;
-  if (!included.length) return {savedCount:0,excludedCount};
+  if (!included.length) return {savedCount:0,excludedCount,rows:[]};
   const rows = included.map((r) => ({
     student_id: r.studentId, tanggal: r.tanggal, status: r.status, note: r.note || "", input_by: userId,
   }));
-  const res = await supabase.from("attendance").upsert(rows, { onConflict: "student_id,tanggal" });
-  mustOk(res, "saveAttendanceBatch");
-  return {savedCount:rows.length,excludedCount};
+  const res = await withDbTimeout(supabase.from("attendance").upsert(rows, { onConflict: "student_id,tanggal" }).select(ATTENDANCE_COLUMNS), "Menyimpan presensi; jika hasil belum pasti, muat ulang presensi tanggal ini sebelum mencoba kembali");
+  const confirmed = mustOk(res, "saveAttendanceBatch") || [];
+  return {savedCount:confirmed.length,excludedCount,rows:confirmed.map(mapAttendanceRow)};
 }
 
-export async function fetchAttendanceForDate(studentIds, tanggal) {
+export async function fetchAttendanceForDate(studentIds, tanggal, { academicYearId = null, signal = null } = {}) {
   const ids = [...new Set((studentIds || []).filter(Boolean))];
   if (!ids.length || !tanggal) return [];
-  const res = await supabase.from("attendance").select("id,student_id,tanggal,status,note,input_by,academic_year_id,class_id,enrollment_id")
-    .in("student_id", ids).eq("tanggal", tanggal).order("id");
-  return (mustOk(res, "fetchAttendanceForDate") || []).map((a) => ({
-    ...activityContext(a), id:a.id, studentId:a.student_id, tanggal:a.tanggal, status:a.status, note:a.note || "", inputBy:a.input_by,
-  }));
+  const res = await fetchRows("attendance", { studentIds: ids, tanggal, academicYearId, signal });
+  return (mustOk(res, "fetchAttendanceForDate") || []).map(mapAttendanceRow);
 }
 
 /* ---------- PENILAIAN ---------- */
@@ -266,14 +297,14 @@ export async function insertScore(entry) {
   const userId = await requireInputUser([entry.inputBy]);
   const eligible = await eligibleStudentIds([entry.studentId]);
   if (!eligible.has(entry.studentId)) throw new Error("Siswa ini tidak termasuk peserta Tahfidz. Muat ulang halaman untuk memperbarui daftar siswa.");
-  const res = await supabase.from("scores").insert({
+  const res = await withDbTimeout(supabase.from("scores").insert({
     student_id: entry.studentId, tanggal: entry.tanggal, surah_id: entry.surahId,
     ayat_mulai: awal, ayat_akhir: akhir,
     nilai: GRADE_TO_NUMBER[entry.nilaiHuruf] ?? 0, nilai_huruf: entry.nilaiHuruf,
     catatan: entry.catatan || null,
     penguji: entry.penguji, input_by: userId,
-  });
-  mustOk(res, "insertScore");
+  }).select(SCORE_COLUMNS).single(), "Menyimpan penilaian; jika hasil belum pasti, muat ulang riwayat siswa sebelum mencoba kembali");
+  return mapScoreRow(mustOk(res, "insertScore"));
 }
 
 // Menyimpan beberapa penilaian sekaligus untuk impor template kelas.
@@ -304,32 +335,19 @@ export async function bulkInsertScores(entries) {
 }
 
 // Setelah input nilai, ambil hanya riwayat siswa terkait agar tidak memuat ulang semua tabel.
-export async function fetchStudentScores(studentId) {
-  const rows = [];
-  for (let offset = 0; ; offset += 500) {
-    const res = await supabase.from("scores").select("*").eq("student_id", studentId).order("id").range(offset, offset + 499);
-    const page = mustOk(res, "fetchStudentScores") || [];
-    rows.push(...page);
-    if (page.length < 500) break;
-  }
-  return rows.map((s) => ({ ...activityContext(s), id:s.id, studentId:s.student_id, tanggal:s.tanggal, surahId:s.surah_id,
-    ayatMulai:s.ayat_mulai, ayatAkhir:s.ayat_akhir, nilai:s.nilai, nilaiHuruf:s.nilai_huruf,
-    catatan:s.catatan || "", penguji:s.penguji, inputBy:s.input_by }));
+export async function fetchStudentScores(studentId, { academicYearId = null, fromDate = null, toDate = null, limit = null, signal = null } = {}) {
+  if (!studentId) return [];
+  if (limit != null && (!Number.isInteger(limit) || limit < 0)) throw new Error("Batas riwayat penilaian tidak valid.");
+  if (limit === 0) return [];
+  const res = await fetchRows("scores", { studentIds: [studentId], academicYearId, fromDate, toDate, limit, signal });
+  return (mustOk(res, "fetchStudentScores") || []).map(mapScoreRow);
 }
 
-export async function fetchScoresForStudents(studentIds) {
+export async function fetchScoresForStudents(studentIds, { academicYearId = null, fromDate = null, toDate = null, signal = null } = {}) {
   const ids = [...new Set((studentIds || []).filter(Boolean))];
   if (!ids.length) return [];
-  const rows = [];
-  for (let offset = 0; ; offset += 500) {
-    const res = await supabase.from("scores").select("*").in("student_id", ids).order("id").range(offset, offset + 499);
-    const page = mustOk(res, "fetchScoresForStudents") || [];
-    rows.push(...page);
-    if (page.length < 500) break;
-  }
-  return rows.map((s) => ({ ...activityContext(s), id:s.id, studentId:s.student_id, tanggal:s.tanggal, surahId:s.surah_id,
-    ayatMulai:s.ayat_mulai, ayatAkhir:s.ayat_akhir, nilai:s.nilai, nilaiHuruf:s.nilai_huruf,
-    catatan:s.catatan || "", penguji:s.penguji, inputBy:s.input_by }));
+  const res = await fetchRows("scores", { studentIds: ids, academicYearId, fromDate, toDate, signal });
+  return (mustOk(res, "fetchScoresForStudents") || []).map(mapScoreRow);
 }
 
 /* ---------- MASTER DATA: SISWA ---------- */
