@@ -23,9 +23,11 @@ export default function AppHeader({ user, viewLabel, roleLabel, photoUrl, onMenu
           <strong>SAQUIN</strong><span>Sahabat Quran Indonesia</span>
         </div>
       </div>
-      <div className="portal-breadcrumb"><span>Ruang kerja</span><ChevronRight size={14} /><strong>{viewLabel}</strong></div>
-      <div className="portal-tools">
+      <div className="portal-context">
         {yearControl && <div className="portal-year-control">{yearControl}</div>}
+        <div className="portal-breadcrumb"><span>Ruang kerja</span><ChevronRight size={14} /><strong>{viewLabel}</strong></div>
+      </div>
+      <div className="portal-tools">
         <div className="portal-account">
           <div className="portal-avatar">{photoUrl ? <img src={photoUrl} alt="" /> : initials}</div>
           <div className="portal-user"><strong>{user.nama}</strong><span>{roleLabel}</span></div>
