@@ -1,0 +1,43 @@
+@media screen {
+  .portal-topbar .portal-tools { display:flex; align-items:center; gap:24px; margin-left:auto; min-width:0; }
+  .portal-topbar .portal-tools .portal-account { margin-left:0; }
+  .portal-topbar .portal-year-control { flex-shrink:0; }
+  .portal-topbar .ay-selector.ay-selector-compact {
+    min-width:0; width:196px; gap:2px; padding:6px 11px;
+    border:1px solid #e4e4e7; border-radius:10px; background:#fafafa;
+    color:#3f3f46; transition:border-color .15s,background .15s;
+  }
+  .portal-topbar .ay-selector-compact:hover { background:#f4f4f5; border-color:#d4d4d8; }
+  .portal-topbar .ay-selector-compact:focus-within { border-color:#16704d; box-shadow:0 0 0 3px #16704d12; }
+  .portal-topbar .ay-selector-compact .ay-selector-caption {
+    display:flex; align-items:center; gap:5px; font-size:10px; font-weight:500; line-height:14px; color:#71717a; white-space:nowrap;
+  }
+  .portal-topbar .ay-selector-compact select {
+    width:100%; min-height:24px; padding:0; border:0; border-radius:3px;
+    background:transparent; color:#27272a; font-size:13px; font-weight:650; line-height:1.5;
+    cursor:pointer; font-variant-numeric:tabular-nums;
+  }
+  .portal-topbar .ay-selector-compact select:focus-visible { outline:2px solid #16704d; outline-offset:2px; }
+  .portal-topbar .ay-selector-compact .ay-selector-state { margin-left:auto; font-size:9px; font-weight:600; color:#71717a; }
+  .portal-topbar .ay-selector-compact .ay-selector-state-active { color:#16704d; }
+  .portal-topbar .ay-selector-compact .ay-selector-state-draft { color:#89631d; }
+  .portal-topbar .ay-selector-compact .ay-selector-state-archived { color:#6b647b; }
+  .portal-topbar .ay-selector-loading { display:inline-flex; color:#71717a; }
+  @media (max-width:1100px) { .portal-topbar .portal-tools { gap:16px; } }
+  @media (max-width:600px) {
+    .portal-topbar { flex-wrap:wrap; }
+    .portal-topbar .portal-tools { display:contents; }
+    .portal-topbar .portal-tools .portal-account { margin-left:auto; }
+    .portal-topbar .portal-year-control { order:3; flex-basis:100%; }
+    .portal-topbar .ay-selector.ay-selector-compact { width:100%; flex-direction:row; align-items:center; gap:16px; padding:7px 11px; }
+    .portal-topbar .ay-selector-compact .ay-selector-caption { flex:1; gap:6px; }
+    .portal-topbar .ay-selector-compact .ay-selector-state { margin-left:4px; }
+    .portal-topbar .ay-selector-compact select { width:124px; font-size:13px; min-height:28px; }
+  }
+  @media (max-width:360px) {
+    .portal-topbar .ay-selector.ay-selector-compact { gap:12px; }
+    .portal-topbar .ay-selector-caption > svg { display:none; }
+    .portal-topbar .ay-selector-compact select { width:116px; }
+  }
+  @media (prefers-reduced-motion:reduce) { .portal-topbar .ay-selector.ay-selector-compact { transition:none; } }
+}

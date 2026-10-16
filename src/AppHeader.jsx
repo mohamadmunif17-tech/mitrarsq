@@ -1,8 +1,9 @@
 import "./brand.css";
+import "./headerYear.css";
 import { useState } from "react";
 import { Menu, LogOut, Loader2, ChevronRight } from "lucide-react";
 
-export default function AppHeader({ user, viewLabel, roleLabel, photoUrl, onMenu, onLogout }) {
+export default function AppHeader({ user, viewLabel, roleLabel, photoUrl, onMenu, onLogout, yearControl }) {
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState("");
   async function logout() {
@@ -23,12 +24,15 @@ export default function AppHeader({ user, viewLabel, roleLabel, photoUrl, onMenu
         </div>
       </div>
       <div className="portal-breadcrumb"><span>Ruang kerja</span><ChevronRight size={14} /><strong>{viewLabel}</strong></div>
-      <div className="portal-account">
-        <div className="portal-avatar">{photoUrl ? <img src={photoUrl} alt="" /> : initials}</div>
-        <div className="portal-user"><strong>{user.nama}</strong><span>{roleLabel}</span></div>
-        <button className="portal-logout" disabled={busy} onClick={logout}>
-          {busy ? <Loader2 size={16} className="animate-spin" /> : <LogOut size={16} />} {busy ? "Keluar..." : "Keluar"}
-        </button>
+      <div className="portal-tools">
+        {yearControl && <div className="portal-year-control">{yearControl}</div>}
+        <div className="portal-account">
+          <div className="portal-avatar">{photoUrl ? <img src={photoUrl} alt="" /> : initials}</div>
+          <div className="portal-user"><strong>{user.nama}</strong><span>{roleLabel}</span></div>
+          <button className="portal-logout" disabled={busy} onClick={logout}>
+            {busy ? <Loader2 size={16} className="animate-spin" /> : <LogOut size={16} />} {busy ? "Keluar..." : "Keluar"}
+          </button>
+        </div>
       </div>
     </header>
     {error && <div className="portal-alert no-print" role="alert">{error}</div>}

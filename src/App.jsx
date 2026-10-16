@@ -3418,15 +3418,11 @@ export default function TahfidzApp() {
       <GlobalStyle />
       <AppHeader user={user} roleLabel={ROLE_LABEL[user.role]} viewLabel={NAV_BY_ROLE[user.role]?.find((item)=>item.id===view)?.label || "Dashboard"}
         photoUrl={user.role === "pengajar" ? db.teachers.find((t)=>t.id===user.refId)?.fotoUrl : null}
+        yearControl={<AcademicYearSelector compact years={db.academicYears} value={year?.id || ""} onChange={setSelectedYearId} loading={["dashboard", "monitoring"].includes(view) && yearActivity.id === year?.id && yearActivity.loading} />}
         onMenu={() => setMobileNavOpen(true)} onLogout={handleLogout} />
       <div style={{ display: "flex", flex: 1 }}>
         <Sidebar user={user} view={view} setView={setView} mobileOpen={mobileNavOpen} onClose={() => setMobileNavOpen(false)} />
         <div className="app-content" style={{ flex: 1, padding: 28, maxWidth: 1180, minWidth: 0 }}>
-          <div className="no-print ay-global-bar">
-            <AcademicYearSelector years={db.academicYears} value={year?.id || ""} onChange={setSelectedYearId} />
-            <span>{year?.status === "active" ? "Tahun aktif" : year?.status === "draft" ? "Persiapan tahun baru" : "Arsip · hanya baca"}</span>
-            {user.role === "admin" && <button className="t-btn t-btn-ghost" onClick={() => setView("academic-years")}>Kelola tahun pelajaran</button>}
-          </div>
           {year?.legacyReviewPending && user.role === "admin" && <div className="ay-notice" role="status">Pemetaan awal 2026/2027 mengikuti kelas saat pembaruan. Periksa dan konfirmasikan di menu Tahun Pelajaran. Riwayat pindah kelas sebelumnya perlu diperiksa.</div>}
           {activityWarning && (
             <div style={{ display: "flex", gap: 10, alignItems: "center", justifyContent: "space-between", marginBottom: 16, padding: "10px 14px", borderRadius: 10, background: "#FFF4D6", color: "#7A5E32", fontSize: 13, fontWeight: 600 }}>
@@ -3434,7 +3430,6 @@ export default function TahfidzApp() {
               <button className="t-btn t-btn-ghost" type="button" onClick={() => syncActivity(user.id).catch(() => {})}>Coba lagi</button>
             </div>
           )}
-          {view === "dashboard" && yearActivity.id === year?.id && yearActivity.loading && <p role="status">Memuat aktivitas tahun pelajaran {year.nama}...</p>}
           {["dashboard", "monitoring"].includes(view) && yearActivity.id === year?.id && yearActivity.error && <div className="ay-notice" role="alert">Ringkasan tahun ini belum lengkap: {yearActivity.error} Presensi dan penilaian tetap memuat data masing-masing. <button className="t-btn" onClick={() => refresh({ activityYear: year }).then(() => setYearActivity({id:year.id,loading:false,error:""})).catch((error) => setYearActivity({id:year.id,loading:false,error:error.message}))}>Muat ulang ringkasan</button></div>}
           <div key={`${view}:${year?.id}`}>
             {!canWriteAcademicYear(year) && ["presensi", "penilaian", "teacher-attendance"].includes(view) && <p className="ay-notice">Tahun ini hanya dapat dilihat. Input kegiatan dibuka pada tahun pelajaran aktif.</p>}
