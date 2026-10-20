@@ -69,7 +69,19 @@ export async function createAcademicClass({ yearId, nama, tingkat = "", jurusan 
   return mapClass(one(await request(supabase.rpc("academic_create_class", { p_year_id: required(yearId, "Tahun pelajaran"), p_nama: required(nama, "Nama kelas"), p_tingkat: tingkat.trim(), p_jurusan: jurusan.trim(), p_rombel: rombel.trim(), p_teacher_id: teacherId || null }), "Membuat kelas")));
 }
 export async function updateAcademicClass({ classId, nama, tingkat = "", jurusan = "", rombel = "", teacherId = null }) {
-  return mapClass(one(await request(supabase.rpc("academic_update_class", { p_class_id: required(classId, "Kelas"), p_nama: required(nama, "Nama kelas"), p_tingkat: tingkat.trim(), p_jurusan: jurusan.trim(), p_rombel: rombel.trim(), p_teacher_id: teacherId || null }), "Memperbarui kelas")));
+  const payload = { p_class_id: required(classId, "Kelas"), p_nama: required(nama, "Nama kelas"), p_tingkat: tingkat.trim(), p_jurusan: jurusan.trim(), p_rombel: rombel.trim(), p_teacher_id: teacherId || null };
+  let row;
+  try { row = one(await request(supabase.rpc("academic_update_class", payload), "Memperbarui kelas")); }
+  catch (error) {
+    if (/Nama, struktur, dan pengajarnya dikunci/i.test(error.message)) throw new Error("Database masih mengunci pergantian pengajar. Jalankan SQL 12_perbaikan_pengajar_kelas.sql di Supabase, lalu coba simpan kembali.");
+    throw error;
+  }
+  if (!row || row.id !== payload.p_class_id || (row.teacher_id || null) !== payload.p_teacher_id
+    || row.nama !== payload.p_nama || (row.tingkat || "") !== payload.p_tingkat
+    || (row.jurusan || "") !== payload.p_jurusan || (row.rombel || "") !== payload.p_rombel) {
+    throw new Error("Hasil perubahan kelas belum dapat dipastikan. Muat ulang data kelas dan periksa pengajarnya sebelum menyimpan ulang.");
+  }
+  return mapClass(row);
 }
 export async function placeAcademicStudents({ yearId, studentIds, classId, effectiveDate, status = "aktif" }) {
   if (!Array.isArray(studentIds) || !studentIds.length) throw new Error("Pilih setidaknya satu siswa.");

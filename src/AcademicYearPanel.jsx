@@ -74,6 +74,7 @@ export default function AcademicYearPanel({ db, user, selectedYearId, onYearChan
   const [placementFilter, setPlacementFilter] = useState("all");
   const [classFilter, setClassFilter] = useState("all");
   const [page, setPage] = useState(1);
+  const [classMessage, setClassMessage] = useState(null);
 
   const classes = useMemo(() => allClasses.filter((item) => item.academicYearId === yearId).sort((a, b) => (a.nama || "").localeCompare(b.nama || "", "id", { numeric: true })), [allClasses, yearId]);
   const classMap = useMemo(() => new Map(allClasses.map((item) => [item.id, item])), [allClasses]);
@@ -108,7 +109,7 @@ export default function AcademicYearPanel({ db, user, selectedYearId, onYearChan
 
   useEffect(() => {
     setSelected([]); setTargetClass(""); setEffectiveDate(dateForYear(year));
-    setEditingClassId(""); setClassForm({ ...emptyClass }); setClassFilter("all"); setPlacementFilter("all"); setPage(1); setMessage(null);
+    setEditingClassId(""); setClassForm({ ...emptyClass }); setClassMessage(null); setClassFilter("all"); setPlacementFilter("all"); setPage(1); setMessage(null);
   }, [yearId]);
   useEffect(() => { setPage(1); }, [search, placementFilter, classFilter]);
 
@@ -117,8 +118,12 @@ export default function AcademicYearPanel({ db, user, selectedYearId, onYearChan
   async function run(action, work) {
     if (busy) return;
     setBusy(action); setMessage(null);
+    if (action === "class") setClassMessage(null);
     try { await work(); }
-    catch (error) { setMessage({ type: "error", text: error?.message || "Perubahan belum dapat disimpan. Silakan coba lagi." }); }
+    catch (error) {
+      const result = { type: "error", text: error?.message || "Perubahan belum dapat disimpan. Silakan coba lagi." };
+      if (action === "class") setClassMessage(result); else setMessage(result);
+    }
     finally { setBusy(""); }
   }
   function checkEffectiveDate(allowFollowingDay = false) {
@@ -153,10 +158,15 @@ export default function AcademicYearPanel({ db, user, selectedYearId, onYearChan
       if (!data.nama) throw new Error("Isi nama kelas atau rombel.");
       if (classes.some((item) => item.id !== editingClassId && (item.nama || "").trim().toLowerCase() === data.nama.toLowerCase())) throw new Error("Nama kelas ini sudah digunakan pada tahun pelajaran yang dipilih.");
       data.teacherId = data.teacherId || null;
-      if (editingClassId) await updateAcademicClass({ ...data, classId: editingClassId });
-      else await createAcademicClass({ ...data, yearId });
-      await refresh(); setEditingClassId(""); setClassForm({ ...emptyClass });
-      setMessage({ type: "success", text: editingClassId ? "Data kelas berhasil diperbarui." : "Kelas berhasil ditambahkan." });
+      const previous = classes.find((item) => item.id === editingClassId);
+      const saved = editingClassId ? await updateAcademicClass({ ...data, classId: editingClassId }) : await createAcademicClass({ ...data, yearId });
+      const text = editingClassId && (previous?.teacherId || null) !== saved.teacherId
+        ? `Pengajar ${saved.nama} berhasil diubah menjadi ${teacherMap.get(saved.teacherId) || "Belum ditugaskan"}.`
+        : editingClassId ? `Data kelas ${saved.nama} berhasil diperbarui.` : `Kelas ${saved.nama} berhasil ditambahkan.`;
+      setEditingClassId(""); setClassForm({ ...emptyClass });
+      setClassMessage({ type: "success", text });
+      try { await refresh(); }
+      catch { setClassMessage({ type: "warning", text: `${text} Tampilan belum berhasil dimuat ulang. Muat ulang halaman untuk melihat hasilnya; tidak perlu menyimpan lagi.` }); }
     });
   }
   async function placeStudents() {
@@ -229,14 +239,18 @@ export default function AcademicYearPanel({ db, user, selectedYearId, onYearChan
 
     {year && <>
       <section className="ay-card"><div className="ay-heading"><div><h3>Kelas dan rombel {year.nama}</h3><p>Nama, jurusan, rombel, dan pengajar berlaku untuk tahun pelajaran ini.</p></div></div>
-        <div className="ay-table-wrap"><table className="ay-table"><thead><tr><th>Kelas / rombel</th><th>Tingkat</th><th>Jurusan</th><th>Rombel</th><th>Pengajar</th><th>Siswa aktif</th><th><span className="ay-sr-only">Tindakan</span></th></tr></thead><tbody>{classes.map((item) => <tr key={item.id}><td>{item.nama}</td><td>{item.tingkat || "—"}</td><td>{item.jurusan || "—"}</td><td>{item.rombel || "—"}</td><td>{teacherMap.get(item.teacherId) || "Belum ditugaskan"}</td><td>{activeRows.filter((row) => row.enrollment.classId === item.id).length}</td><td><button type="button" className="ay-button ay-small" disabled={!!busy || readOnly} onClick={() => { setEditingClassId(item.id); setClassForm({ nama: item.nama || "", tingkat: item.tingkat || "", jurusan: item.jurusan || "", rombel: item.rombel || "", teacherId: item.teacherId || "" }); }}>Ubah</button></td></tr>)}{!classes.length && <tr><td colSpan={7}>Belum ada kelas pada tahun pelajaran ini.</td></tr>}</tbody></table></div>
-        {!readOnly && <form className="ay-class-form" onSubmit={submitClass}><fieldset disabled={!!busy}><legend>{editingClassId ? "Ubah kelas" : "Tambah kelas / rombel"}</legend><div className="ay-form-grid">
+        <div className="ay-table-wrap"><table className="ay-table"><thead><tr><th>Kelas / rombel</th><th>Tingkat</th><th>Jurusan</th><th>Rombel</th><th>Pengajar</th><th>Siswa aktif</th><th><span className="ay-sr-only">Tindakan</span></th></tr></thead><tbody>{classes.map((item) => <tr key={item.id}><td>{item.nama}</td><td>{item.tingkat || "—"}</td><td>{item.jurusan || "—"}</td><td>{item.rombel || "—"}</td><td>{teacherMap.get(item.teacherId) || "Belum ditugaskan"}</td><td>{activeRows.filter((row) => row.enrollment.classId === item.id).length}</td><td><button type="button" className="ay-button ay-small" disabled={!!busy || readOnly} onClick={() => { setClassMessage(null); setEditingClassId(item.id); setClassForm({ nama: item.nama || "", tingkat: item.tingkat || "", jurusan: item.jurusan || "", rombel: item.rombel || "", teacherId: item.teacherId || "" }); }}>Ubah</button></td></tr>)}{!classes.length && <tr><td colSpan={7}>Belum ada kelas pada tahun pelajaran ini.</td></tr>}</tbody></table></div>
+        {!readOnly && <form className="ay-class-form" onSubmit={submitClass}>
+          {classMessage && <div className={`ay-notice ay-${classMessage.type}`} style={{ marginBottom:16 }} role={classMessage.type === "error" ? "alert" : "status"}>{classMessage.text}</div>}
+          <fieldset disabled={!!busy}><legend>{editingClassId ? "Ubah kelas" : "Tambah kelas / rombel"}</legend>
+          {editingClassId && <p className="ay-note" style={{ marginBottom:14 }}>Pengajar dapat diganti. Catatan kegiatan lama tetap tersimpan dan akses kelas mengikuti pengajar baru. Nama/struktur kelas yang sudah memiliki kegiatan tetap dikunci.</p>}
+          <div className="ay-form-grid">
           <label>Nama kelas<input required maxLength={100} placeholder="XI TKJ 1" value={classForm.nama} onChange={(event) => setClassForm({ ...classForm, nama: event.target.value })} /></label>
           <label>Tingkat<input maxLength={20} placeholder="XI" value={classForm.tingkat} onChange={(event) => setClassForm({ ...classForm, tingkat: event.target.value })} /></label>
           <label>Jurusan<input maxLength={100} placeholder="TKJ" value={classForm.jurusan} onChange={(event) => setClassForm({ ...classForm, jurusan: event.target.value })} /></label>
           <label>Rombel<input maxLength={50} placeholder="1" value={classForm.rombel} onChange={(event) => setClassForm({ ...classForm, rombel: event.target.value })} /></label>
           <label>Pengajar<select value={classForm.teacherId} onChange={(event) => setClassForm({ ...classForm, teacherId: event.target.value })}><option value="">Belum ditugaskan</option>{teachers.map((teacher) => <option key={teacher.id} value={teacher.id}>{teacher.nama}</option>)}</select></label>
-        </div><div className="ay-actions"><button className="ay-button ay-primary" type="submit">{busy === "class" ? "Menyimpan…" : editingClassId ? "Simpan perubahan kelas" : "Tambah kelas"}</button>{editingClassId && <button className="ay-button" type="button" onClick={() => { setEditingClassId(""); setClassForm({ ...emptyClass }); }}>Batal mengubah</button>}</div></fieldset></form>}
+        </div><div className="ay-actions"><button className="ay-button ay-primary" type="submit">{busy === "class" ? "Menyimpan…" : editingClassId ? "Simpan perubahan kelas" : "Tambah kelas"}</button>{editingClassId && <button className="ay-button" type="button" onClick={() => { setClassMessage(null); setEditingClassId(""); setClassForm({ ...emptyClass }); }}>Batal mengubah</button>}</div></fieldset></form>}
       </section>
 
       <section className="ay-card"><div className="ay-heading"><div><h3>Penempatan dan riwayat siswa</h3><p>Pilih siswa untuk ditempatkan, dipindahkan, dinaikkan kelas, atau ditandai lulus/keluar. Identitas siswa tetap sama.</p></div></div>
